@@ -199,6 +199,12 @@ $('btn-arm').onclick = () => {
 };
 $('btn-fly').onclick = () => { cmd('start_mission'); $('mission-info').innerHTML = '🚀 <b>Mission started ▶ Auto-Takeoff</b>'; };
 $('btn-rtl').onclick = () => { cmd('rtl'); $('mission-info').innerHTML = '⟲ <b>RTL Commanded (Returning to Port Base)</b>'; };
+$('btn-stop-mission').onclick = () => {
+  cmd('stop_mission');
+  if (routeLine) { routeLine.remove(); routeLine = null; }
+  routeLL = null;
+  $('mission-info').innerHTML = '⏹ <b>Mission stopped</b> — holding in place & cleared. Re-Plan then Upload for a new run.';
+};
 $('btn-drop').onclick = () => {
   if (confirm('Deploy SAR Cargo / Buoy Release Mechanism?')) {
     cmd('drop');

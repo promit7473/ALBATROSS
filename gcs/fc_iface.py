@@ -119,6 +119,15 @@ class MavlinkRestFC(FCInterface):
     def rtl(self):
         return self.set_mode(MAIN_AUTO, SUB_RTL)
 
+    def stop_mission(self):
+        """Halt the active mission: hold/loiter in place (safe) and wipe the
+        uploaded mission so the next Upload starts clean."""
+        self.set_mode(MAIN_AUTO, SUB_LOITER)          # AUTO.LOITER -> hover in place
+        time.sleep(0.2)
+        _post({"type": "MISSION_CLEAR_ALL", "target_system": TGT_SYS,
+               "target_component": TGT_COMP, "mission_type": {"type": "MAV_MISSION_TYPE_ALL"}})
+        return True
+
     def start_mission(self):
         _post({"type": "MISSION_SET_CURRENT", "seq": 0, "target_system": TGT_SYS, "target_component": TGT_COMP})
         time.sleep(0.1)

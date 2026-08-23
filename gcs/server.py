@@ -187,6 +187,8 @@ class H(BaseHTTPRequestHandler):
             self._static(os.path.join(WEB, "style.css"), "text/css")
         elif p == "/drone.glb":
             self._static(os.path.join(WEB, "drone.glb"), "model/gltf-binary")
+        elif p == "/intelis_logo.svg":
+            self._static(os.path.join(WEB, "intelis_logo.svg"), "image/svg+xml")
         elif p == "/video.mjpeg":
             return self._stream_video()
         elif p == "/api/kml":
@@ -268,6 +270,7 @@ class H(BaseHTTPRequestHandler):
             if cmd == "arm": FC.arm(True)
             elif cmd == "disarm": FC.arm(False)
             elif cmd == "rtl": FC.rtl()
+            elif cmd == "stop_mission": FC.stop_mission()
             elif cmd == "start_mission": FC.start_mission()
             elif cmd == "reposition":
                 lat = body.get("lat")
