@@ -15,8 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # which works under Wayland/Xorg/headless. We just proxy it so the UI stays on one port.
 CAM_BRIDGE_URL = os.environ.get("CAM_BRIDGE_URL", "http://127.0.0.1:8091/video.mjpeg")
 
-HERE = os.path.dirname(os.path.abspath(__file__))          # .../maritime_project/gcs
-ROOT = os.environ.get("MARITIME_ROOT", os.path.dirname(HERE))  # .../maritime_project
+HERE = os.path.dirname(os.path.abspath(__file__))              # <project-root>/gcs
+ROOT = os.environ.get("MARITIME_ROOT", os.path.dirname(HERE))  # <project-root> (relocatable)
 WEB = os.path.join(HERE, "web")
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "ros2_ws/src/maritime_autonomy/maritime_autonomy"))

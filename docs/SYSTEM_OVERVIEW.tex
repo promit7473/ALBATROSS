@@ -17,7 +17,7 @@
 \newcommand{\yes}{\textcolor{green!55!black}{\textbf{Yes}}}
 \newcommand{\done}{\textcolor{green!55!black}{\textbf{Done}}}
 
-\title{\vspace{-1.5em}Maritime UAV --- System Architecture \& Review Response\\
+\title{\vspace{-1.5em}ALBATROSS --- System Architecture \& Review Response\\
 \large PX4 SITL + Gazebo (Chattogram) + ROS 2 autonomy + web GCS}
 \author{}
 \date{\today}
@@ -90,17 +90,22 @@ Data path: \texttt{browser $\to$ :8080 server.py $\to$ fc\_iface $\to$ :8088 mav
 $\to$ :14550 MAVLink $\to$ PX4 SITL $\leftrightarrow$ Gazebo}. The camera feed flows
 \texttt{Gazebo $\to$ gz-transport $\to$ cam\_bridge (:8091) $\to$ :8080 proxy $\to$ browser}.
 
-\subsection{Current directory layout (to be consolidated)}
+\subsection{Directory layout (consolidated)}
+Everything lives under one relocatable project root (\texttt{albatross/}):
 \begin{lstlisting}
-~/maritime_ws     ROS 2 workspace (pkg maritime_autonomy: planner, nodes, world)
-~/maritime_gcs    web GCS (server.py, fc_iface, chase_cam, cam_bridge, web/)
-~/PX4-Autopilot   PX4 SITL + Chattogram gz world + models
-~/mavlink2rest    MAVLink<->REST binary
-~/launch_chattogram_clean.sh          one-shot SITL launcher
-~/Chattogram ... Exclusion Zones.kml  operating area + no-fly zones
+albatross/
+  gcs/        web GCS: server.py, fc_iface, chase_cam, cam_bridge, web/
+  ros2_ws/    ROS 2 workspace - pkg maritime_autonomy (planner, nodes, world)
+  launch/     launch_chattogram_clean.sh, start_all.sh, restart_gcs.sh
+  assets/     chattogram_zones.kml (operating area + exclusion zones)
+  docs/       this overview + the launch guide (.tex/.pdf)
+  media/      demo.mp4 / demo.gif
+  external/   symlinks -> PX4-Autopilot and mavlink2rest (kept out of git)
 \end{lstlisting}
-These live under \verb|$HOME| with absolute paths hard-coded in \texttt{server.py} and
-the launcher; consolidating them into one project root is planned (see note at end).
+Paths are self-locating: \texttt{server.py} derives the root from its own location
+(override with \texttt{MARITIME\_ROOT}) and the shell scripts derive it from their
+path, so the folder can be renamed or moved freely. PX4-Autopilot and mavlink2rest
+stay external (multi-GB / third-party) and are symlinked into \texttt{external/}.
 
 \section{Review Feedback --- Points \& Fixability}
 \renewcommand{\arraystretch}{1.25}

@@ -203,8 +203,9 @@ class PathPlanner:
 
 def _demo():
     import os
-    kml = os.environ.get('MARITIME_KML',
-        os.path.expanduser('~/maritime_project/assets/chattogram_zones.kml'))
+    _root = os.environ.get('MARITIME_ROOT',
+        os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')))
+    kml = os.environ.get('MARITIME_KML', os.path.join(_root, 'assets/chattogram_zones.kml'))
     m = OperatingMap(kml)
     op = m.operating_polygon('Port Gate', '5km')
     pl = PathPlanner(m, op)

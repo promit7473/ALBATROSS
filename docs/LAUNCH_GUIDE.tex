@@ -17,7 +17,7 @@
   showstringspaces=false, xleftmargin=6pt, xrightmargin=6pt,
 }
 
-\title{\vspace{-1.5em}Maritime GCS --- Terminal Launch Guide\\
+\title{\vspace{-1.5em}ALBATROSS --- Terminal Launch Guide\\
 \large Chattogram Port SITL + Gazebo chase-cam feed}
 \author{}
 \date{\today}
@@ -37,13 +37,16 @@ One command brings up the whole stack. The pieces:
 \end{itemize}
 
 \section{Launch from the terminal}
-\textbf{One-shot (recommended):}
+\textbf{One-shot (recommended)} --- from the project root (e.g.\ \texttt{\textasciitilde/albatross}):
 \begin{lstlisting}
-bash ~/maritime_gcs/start_all.sh
+bash launch/start_all.sh
 \end{lstlisting}
 This sources the ROS 2 / Gazebo environment, kills any stale instances, then starts
-the web server and \texttt{launch\_chattogram\_clean.sh} (SITL + chase cam + bridge),
-all detached so they survive the terminal closing.
+the web server and \texttt{launch/launch\_chattogram\_clean.sh} (SITL + chase cam +
+bridge), all detached so they survive the terminal closing. Paths are self-locating,
+so the folder can live anywhere and be named anything (override with
+\texttt{MARITIME\_ROOT}). PX4-Autopilot and mavlink2rest are expected as symlinks in
+\texttt{external/}.
 
 \textbf{Then open} \url{http://localhost:8080} and click the \texttt{Gazebo feed} button.
 
@@ -54,15 +57,16 @@ command line, \texttt{pkill} kills the shell. Always run it as a \emph{file}.
 
 \section{Manual launch (if you want the pieces separately)}
 \begin{lstlisting}
+# run from the project root
 # 1) environment
 source /opt/ros/humble/setup.bash
-source ~/PX4-Autopilot/Tools/simulation/gz/setup.sh
+source external/PX4-Autopilot/Tools/simulation/gz/setup.sh
 
 # 2) GCS web server (:8080)
-python3 ~/maritime_gcs/server.py 8080
+python3 gcs/server.py 8080
 
 # 3) SITL + chase cam + bridge + mavlink2rest (in another terminal)
-bash ~/launch_chattogram_clean.sh
+bash launch/launch_chattogram_clean.sh
 \end{lstlisting}
 
 \section{Verify it is up ($\sim$15\,s warmup)}
@@ -79,8 +83,10 @@ curl -s http://localhost:8091/healthz     # -> {"ok": true, "fresh": true}
 The chase-cam feed needs $\sim$15\,s after boot (Gazebo render-engine warmup);
 until then the feed shows a ``Waiting for Gazebo camera\ldots'' placeholder.
 
-\section{Enable arming (SITL only)}
-PX4 SITL blocks arming with ``No connection to the GCS''. Clear it via the pxh FIFO:
+\section{Arming \& mission flow}
+The launcher \emph{auto-applies} the SITL-only arming bypass plus the smooth-flight
+and yaw params about 12\,s after boot, so no manual step is normally needed. To set
+them by hand, write to the pxh FIFO:
 \begin{lstlisting}
 for p in "COM_RC_IN_MODE 4" "CBRK_SUPPLY_CHK 894281" \
          "NAV_DLL_ACT 0" "NAV_RCL_ACT 0" "COM_RCL_EXCEPT 7"; do
@@ -88,7 +94,9 @@ for p in "COM_RC_IN_MODE 4" "CBRK_SUPPLY_CHK 894281" \
 done
 echo "param save" > ~/.px4_stdin
 \end{lstlisting}
-Full flow in the UI: \textbf{Set goal $\rightarrow$ Plan route $\rightarrow$ Upload $\rightarrow$ Arm $\rightarrow$ Start}.
+Full flow in the UI: \textbf{Add waypoints} (each with its own height) $\rightarrow$
+\textbf{Plan route} (routes around no-fly zones) $\rightarrow$ \textbf{Upload}
+$\rightarrow$ \textbf{Arm} $\rightarrow$ \textbf{Start}.
 
 \section{Stop everything}
 \begin{lstlisting}
