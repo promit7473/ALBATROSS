@@ -103,7 +103,11 @@ def plan_multi(start, waypoints, default_alt):
     between consecutive points so the path NEVER crosses a no-fly zone; a waypoint
     inside a zone is clamped to the nearest safe point. Returns [[lat,lon,alt],...]."""
     pp = get_planner()
-    out, clamped = [], []
+    clamped = []
+    # route[0] is the START (home on the ground, or the live drone position when
+    # airborne) so takeoff happens THERE and every user waypoint is actually flown.
+    first_alt = float(waypoints[0].get("alt", default_alt)) if waypoints else float(default_alt)
+    out = [[round(start[0], 7), round(start[1], 7), first_alt]]
     prev = (start[0], start[1])
     for idx, wp in enumerate(waypoints):
         gl = (wp["lat"], wp["lon"])
