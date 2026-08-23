@@ -1,0 +1,26 @@
+# ROS 2 build artifacts (absolute paths baked in; rebuild with colcon)
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime state / logs
+*.log
+*.pgid
+*.pid
+gcs/operating_area.json
+
+# External heavy / third-party deps (symlinked in locally, not committed)
+external/
+
+# LaTeX aux
+*.aux
+*.out
+*.toc
+
+# Editor
+.vscode/
+.idea/

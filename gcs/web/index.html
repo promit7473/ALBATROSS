@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Maritime GCS — Chattogram Port</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Widgets/widgets.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="tools">
+    <div class="tools-title">OPERATING&nbsp;BOUNDARY</div>
+    <button id="btn-draw">✏️ Draw new</button>
+    <button id="btn-edit">✎ Edit / drag</button>
+    <button id="btn-clear">🗑 Clear</button>
+    <button id="btn-save" class="primary">💾 Save</button>
+    <div class="tools-info" id="area-info">—</div>
+  </div>
+
+  <div id="mission">
+    <div class="tools-title">MISSION CONTROL</div>
+    <div class="mrow" style="margin-bottom: 8px;">
+      <button id="btn-sitl-start" class="go" style="background:#059669;border-color:#10b981;">🚀 Launch SITL</button>
+      <button id="btn-sitl-stop" class="warn">⏹ Stop SITL</button>
+    </div>
+    <label class="alt-row">Height (new WP) <input id="alt" type="number" value="45" min="5" max="200" /> m</label>
+    <input id="alt-slider" type="range" min="5" max="200" value="45" step="5" class="alt-slider" />
+    <div class="mrow">
+      <button id="btn-add-wp">➕ Add waypoints</button>
+      <button id="btn-clear-wp" class="warn">🗑 Clear</button>
+    </div>
+    <div id="wp-list" class="wp-list"></div>
+    <button id="btn-plan">🧭 Plan route (avoids no-fly)</button>
+    <div class="mrow" style="margin: 4px 0; align-items:center;">
+      <label class="chk"><input type="checkbox" id="chk-rtl" checked /> Auto-RTL @</label>
+      <input id="rtl-alt" class="rtl-alt" type="number" value="60" min="10" max="200" /> m
+    </div>
+    <button id="btn-upload" class="primary">⬆ Upload mission</button>
+    <div class="mrow">
+      <button id="btn-arm">🔓 Arm</button>
+      <button id="btn-fly" class="go">▶ Start</button>
+      <button id="btn-rtl" class="warn">⟲ RTL</button>
+    </div>
+    <div class="mrow" style="margin-top: 6px;">
+      <button id="btn-goto" class="primary" style="background:#0284c7;border-color:#38bdf8;">📍 Fly to last WP</button>
+      <button id="btn-drop" class="warn" style="background:#ea580c;border-color:#f97316;color:#fff;">🛟 Drop Cargo</button>
+    </div>
+    <div class="tools-info" id="mission-info">add waypoints → set heights → plan → upload → start</div>
+  </div>
+
+  <button id="btn-3d">🌐 3D</button>
+  <button id="btn-feed">📹 Gazebo feed</button>
+  <div id="feed-panel" class="floatwin">
+    <div class="win-bar drag-handle"><span>GAZEBO LIVE — chase cam</span><span id="feed-close" class="win-x">✕</span></div>
+    <div class="win-body"><img id="feed-img" alt="Chase camera feed — starts once SITL is running" /></div>
+  </div>
+  <div id="cesium-wrap" class="floatwin">
+    <div class="win-bar drag-handle"><span>3D VIEW</span>
+      <span class="win-btns">
+        <button id="btn-3d-follow" class="winbtn">🎥 Follow</button>
+        <button id="btn-2d" class="winbtn">✕</button>
+      </span>
+    </div>
+    <div class="win-body"><div id="cesiumContainer"></div></div>
+  </div>
+
+  <div id="hud">
+    <div class="hud-title">MARITIME&nbsp;GCS <span id="conn" class="pill off">NO&nbsp;LINK</span></div>
+    <div class="row"><span>Mode</span><b id="mode">—</b></div>
+    <div class="row"><span>Armed</span><b id="armed">—</b></div>
+    <div class="row"><span>Rel&nbsp;Alt</span><b id="relalt">—</b></div>
+    <div class="row"><span>Gnd&nbsp;Spd</span><b id="gspd">—</b></div>
+    <div class="row"><span>Heading</span><b id="hdg">—</b></div>
+    <div class="row"><span>Battery</span><b id="batt">—</b></div>
+    <div class="row"><span>GPS</span><b id="gps">—</b></div>
+    <div class="row small"><span>Lat/Lon</span><b id="ll">—</b></div>
+  </div>
+
+  <div id="legend">
+    <div><span class="sw op"></span> Operating area</div>
+    <div><span class="sw ex"></span> Exclusion zone</div>
+    <div><span class="sw base"></span> Base</div>
+    <div><span class="sw drone"></span> Drone</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+  <script>window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/';</script>
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Cesium.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

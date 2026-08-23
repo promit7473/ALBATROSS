@@ -1,0 +1,140 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <model name="drone">
+    <static>false</static>
+    <pose>0 0 2 0 0 0</pose>
+    <link name="base_link">
+      <gravity>false</gravity>
+      <inertial>
+        <mass>2.0</mass>
+        <inertia>
+          <ixx>0.02</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.02</iyy><iyz>0</iyz>
+          <izz>0.04</izz>
+        </inertia>
+      </inertial>
+      <visual name="base_link_visual">
+        <pose>0 0 0.025 0 0 3.141592654</pose>
+        <geometry>
+          <mesh><scale>1 1 1</scale><uri>model://drone/meshes/NXP-HGD-CF.dae</uri></mesh>
+        </geometry>
+      </visual>
+      <visual name="motor_base_fl">
+        <pose>0.174 0.174 0.032 0 0 -0.45</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Base.dae</uri></mesh></geometry>
+      </visual>
+      <visual name="motor_base_bl">
+        <pose>-0.174 0.174 0.032 0 0 -0.45</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Base.dae</uri></mesh></geometry>
+      </visual>
+      <visual name="motor_base_fr">
+        <pose>0.174 -0.174 0.032 0 0 -0.45</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Base.dae</uri></mesh></geometry>
+      </visual>
+      <visual name="motor_base_br">
+        <pose>-0.174 -0.174 0.032 0 0 -0.45</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Base.dae</uri></mesh></geometry>
+      </visual>
+      <visual name="bell_fr">
+        <pose>0.174 -0.174 0.028 0 0 0</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Bell.dae</uri></mesh></geometry>
+      </visual>
+      <visual name="bell_bl">
+        <pose>-0.174 0.174 0.028 0 0 0</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Bell.dae</uri></mesh></geometry>
+      </visual>
+      <visual name="bell_fl">
+        <pose>0.174 0.174 0.028 0 0 0</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Bell.dae</uri></mesh></geometry>
+      </visual>
+      <visual name="bell_br">
+        <pose>-0.174 -0.174 0.028 0 0 0</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://drone/meshes/5010Bell.dae</uri></mesh></geometry>
+      </visual>
+    </link>
+
+    <!-- Rotor links spin about the MOTOR hub (link pose = motor position).
+         The 1345_prop mesh has an origin offset of (0.022, 0.1464), so the
+         visual is shifted by (-0.022, -0.1464) to sit centered on the hub. -->
+    <link name="prop_fr">
+      <gravity>false</gravity>
+      <pose>0.174 -0.174 0.044 0 0 0</pose>
+      <inertial><mass>0.01</mass>
+        <inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz><iyy>1e-5</iyy><iyz>0</iyz><izz>2e-5</izz></inertia>
+      </inertial>
+      <visual name="v">
+        <pose>-0.022 -0.1464 0 0 0 0</pose>
+        <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://drone/meshes/1345_prop_ccw.stl</uri></mesh></geometry>
+        <material><ambient>0.3 0.3 0.3</ambient><diffuse>0.3 0.3 0.3</diffuse></material>
+      </visual>
+    </link>
+    <joint name="prop_fr_joint" type="revolute">
+      <parent>base_link</parent><child>prop_fr</child>
+      <axis><xyz>0 0 1</xyz><dynamics><damping>0</damping><friction>0</friction></dynamics></axis>
+    </joint>
+
+    <link name="prop_fl">
+      <gravity>false</gravity>
+      <pose>0.174 0.174 0.044 0 0 0</pose>
+      <inertial><mass>0.01</mass>
+        <inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz><iyy>1e-5</iyy><iyz>0</iyz><izz>2e-5</izz></inertia>
+      </inertial>
+      <visual name="v">
+        <pose>-0.022 -0.1464 0 0 0 0</pose>
+        <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://drone/meshes/1345_prop_cw.stl</uri></mesh></geometry>
+        <material><ambient>0.3 0.3 0.3</ambient><diffuse>0.3 0.3 0.3</diffuse></material>
+      </visual>
+    </link>
+    <joint name="prop_fl_joint" type="revolute">
+      <parent>base_link</parent><child>prop_fl</child>
+      <axis><xyz>0 0 1</xyz><dynamics><damping>0</damping><friction>0</friction></dynamics></axis>
+    </joint>
+
+    <link name="prop_bl">
+      <gravity>false</gravity>
+      <pose>-0.174 0.174 0.044 0 0 0</pose>
+      <inertial><mass>0.01</mass>
+        <inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz><iyy>1e-5</iyy><iyz>0</iyz><izz>2e-5</izz></inertia>
+      </inertial>
+      <visual name="v">
+        <pose>-0.022 -0.1464 0 0 0 0</pose>
+        <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://drone/meshes/1345_prop_ccw.stl</uri></mesh></geometry>
+        <material><ambient>0.3 0.3 0.3</ambient><diffuse>0.3 0.3 0.3</diffuse></material>
+      </visual>
+    </link>
+    <joint name="prop_bl_joint" type="revolute">
+      <parent>base_link</parent><child>prop_bl</child>
+      <axis><xyz>0 0 1</xyz><dynamics><damping>0</damping><friction>0</friction></dynamics></axis>
+    </joint>
+
+    <link name="prop_br">
+      <gravity>false</gravity>
+      <pose>-0.174 -0.174 0.044 0 0 0</pose>
+      <inertial><mass>0.01</mass>
+        <inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz><iyy>1e-5</iyy><iyz>0</iyz><izz>2e-5</izz></inertia>
+      </inertial>
+      <visual name="v">
+        <pose>-0.022 -0.1464 0 0 0 0</pose>
+        <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://drone/meshes/1345_prop_cw.stl</uri></mesh></geometry>
+        <material><ambient>0.3 0.3 0.3</ambient><diffuse>0.3 0.3 0.3</diffuse></material>
+      </visual>
+    </link>
+    <joint name="prop_br_joint" type="revolute">
+      <parent>base_link</parent><child>prop_br</child>
+      <axis><xyz>0 0 1</xyz><dynamics><damping>0</damping><friction>0</friction></dynamics></axis>
+    </joint>
+
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>prop_fr_joint</joint_name><initial_velocity>80.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>prop_bl_joint</joint_name><initial_velocity>80.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>prop_fl_joint</joint_name><initial_velocity>-80.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>prop_br_joint</joint_name><initial_velocity>-80.0</initial_velocity>
+    </plugin>
+  </model>
+</sdf>

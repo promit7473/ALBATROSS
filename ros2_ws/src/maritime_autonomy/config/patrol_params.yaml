@@ -1,0 +1,13 @@
+/maritime_patrol:
+  ros__parameters:
+    # PX4 SITL home (Zurich) by default so it flies out-of-the-box.
+    # For the real mission, set these to the Chattogram port patrol-area centre.
+    # If kml_path is set and center is still the SITL default, the KML
+    # operating-polygon centroid overrides it automatically.
+    center_lat: 47.3977508
+    center_lon: 8.5456073
+    altitude: 30.0        # metres AGL
+    box_north_m: 80.0     # patrol rectangle N-S size
+    box_east_m: 120.0     # patrol rectangle E-W size
+    loops: 2
+    kml_path: '/home/mhpromit7473/Chattogram Port — Drone Operating Area & Exclusion Zones.kml'

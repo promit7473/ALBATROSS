@@ -1,0 +1,79 @@
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Plane Cell Count: 50
+      Reference Frame: map
+      Value: true
+      Color: 100; 100; 100
+    - Alpha: 1
+      Class: rviz_default_plugins/TF
+      Name: TF
+      Show Arrows: false
+      Show Axes: true
+      Show Names: true
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.5
+      Axes Radius: 0.05
+      Class: rviz_default_plugins/Pose
+      Color: 255; 25; 0
+      Name: DronePose
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /drone/pose
+      Value: true
+    - Alpha: 0.8
+      Class: rviz_default_plugins/Imu
+      Name: IMU
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /mavros/imu/data
+      Value: true
+      Axes Properties:
+        Axes Length: 0.5
+        Axes Radius: 0.03
+        Color: 204; 51; 204
+      Box Properties:
+        Color: 255; 0; 0
+  Enabled: true
+  Global Options:
+    Background Color: 186; 218; 241
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/ThirdPersonFollower
+      Distance: 12
+      Enable Stereo Rendering:
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.4
+      Target Frame: drone_base_link
+      Value: ThirdPersonFollower (rviz_default_plugins)
+      Yaw: 3.14
+Window Geometry:
+  Height: 900
+  Width: 1600

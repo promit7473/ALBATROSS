@@ -1,0 +1,116 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,urlcolor=blue,linkcolor=black]{hyperref}
+\usepackage{parskip}
+
+\definecolor{bg}{gray}{0.96}
+\definecolor{cmt}{rgb}{0.30,0.45,0.30}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{bg},
+  frame=single, framesep=6pt, rulecolor=\color{gray!40},
+  breaklines=true, columns=fullflexible, keepspaces=true,
+  commentstyle=\color{cmt}\itshape,
+  showstringspaces=false, xleftmargin=6pt, xrightmargin=6pt,
+}
+
+\title{\vspace{-1.5em}Maritime GCS --- Terminal Launch Guide\\
+\large Chattogram Port SITL + Gazebo chase-cam feed}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+\section{What launches}
+One command brings up the whole stack. The pieces:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+  \item \textbf{GCS web server} (\texttt{server.py}) on \texttt{http://localhost:8080} --- map, mission planner, telemetry, feed proxy.
+  \item \textbf{PX4 SITL + Gazebo} (\texttt{gz\_x500}) in the \texttt{chattogram} world, home at the port.
+  \item \textbf{Chase camera} (\texttt{chase\_cam.py}) --- spawns an invisible camera that follows the drone from behind/above and publishes \texttt{/chase\_cam}.
+  \item \textbf{Camera bridge} (\texttt{cam\_bridge.py}) --- encodes \texttt{/chase\_cam} to MJPEG on \texttt{:8091}; the web UI's feed proxies it.
+  \item \textbf{mavlink2rest} --- MAVLink $\rightarrow$ REST on \texttt{:8088} for telemetry/commands.
+\end{itemize}
+
+\section{Launch from the terminal}
+\textbf{One-shot (recommended):}
+\begin{lstlisting}
+bash ~/maritime_gcs/start_all.sh
+\end{lstlisting}
+This sources the ROS 2 / Gazebo environment, kills any stale instances, then starts
+the web server and \texttt{launch\_chattogram\_clean.sh} (SITL + chase cam + bridge),
+all detached so they survive the terminal closing.
+
+\textbf{Then open} \url{http://localhost:8080} and click the \texttt{Gazebo feed} button.
+
+\medskip
+\emph{Warning:} do \textbf{not} paste the launcher's contents inline. It runs
+\texttt{pkill -f "cam\_bridge.py"} etc.; if those strings are in your shell's own
+command line, \texttt{pkill} kills the shell. Always run it as a \emph{file}.
+
+\section{Manual launch (if you want the pieces separately)}
+\begin{lstlisting}
+# 1) environment
+source /opt/ros/humble/setup.bash
+source ~/PX4-Autopilot/Tools/simulation/gz/setup.sh
+
+# 2) GCS web server (:8080)
+python3 ~/maritime_gcs/server.py 8080
+
+# 3) SITL + chase cam + bridge + mavlink2rest (in another terminal)
+bash ~/launch_chattogram_clean.sh
+\end{lstlisting}
+
+\section{Verify it is up ($\sim$15\,s warmup)}
+\begin{lstlisting}
+# web server responding
+curl -s http://localhost:8080/api/kml | head -c 60
+
+# telemetry connected (expect "connected": true, 3D fix)
+curl -s http://localhost:8080/api/telemetry
+
+# camera feed producing fresh frames
+curl -s http://localhost:8091/healthz     # -> {"ok": true, "fresh": true}
+\end{lstlisting}
+The chase-cam feed needs $\sim$15\,s after boot (Gazebo render-engine warmup);
+until then the feed shows a ``Waiting for Gazebo camera\ldots'' placeholder.
+
+\section{Enable arming (SITL only)}
+PX4 SITL blocks arming with ``No connection to the GCS''. Clear it via the pxh FIFO:
+\begin{lstlisting}
+for p in "COM_RC_IN_MODE 4" "CBRK_SUPPLY_CHK 894281" \
+         "NAV_DLL_ACT 0" "NAV_RCL_ACT 0" "COM_RCL_EXCEPT 7"; do
+  echo "param set $p" > ~/.px4_stdin; sleep 0.4
+done
+echo "param save" > ~/.px4_stdin
+\end{lstlisting}
+Full flow in the UI: \textbf{Set goal $\rightarrow$ Plan route $\rightarrow$ Upload $\rightarrow$ Arm $\rightarrow$ Start}.
+
+\section{Stop everything}
+\begin{lstlisting}
+# from the UI: click "Stop SITL", or from the terminal:
+pkill -f "gz sim"; pkill -f cam_bridge.py; pkill -f chase_cam.py
+pkill -f mavlink2rest; pkill -f "bin/px4"
+\end{lstlisting}
+
+\section{Why the feed is a chase cam (not a screen grab)}
+The old feed screen-scraped the desktop with \texttt{ffmpeg x11grab}, which returns
+an all-black frame under this \textbf{Wayland} session (XWayland is rootless).
+The current feed renders a real Gazebo camera on the GPU and streams it, so it works
+under Wayland, Xorg, or fully headless. \texttt{chase\_cam.py} moves that camera to
+track the drone every tick using the same \texttt{set\_pose} service the project's
+\texttt{imu\_sim\_bridge} uses.
+
+\section*{Ports at a glance}
+\begin{tabular}{ll}
+\texttt{8080} & GCS web UI + API + \texttt{/video.mjpeg} proxy \\
+\texttt{8091} & chase-cam MJPEG bridge \\
+\texttt{8088} & mavlink2rest REST API \\
+\texttt{14550} & PX4 $\rightarrow$ mavlink2rest (UDP) \\
+\end{tabular}
+
+\end{document}
