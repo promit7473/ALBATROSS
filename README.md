@@ -1,14 +1,21 @@
 # Maritime Autonomy — Chattogram Port UAV
 
+<div align="justify">
+
 A full **software-in-the-loop autonomous maritime-patrol simulator**: PX4 SITL +
 Gazebo (real Chattogram satellite/terrain world) + ROS 2 autonomy + a browser
 Ground Control Station with live map, 3D view, a **no-fly-aware multi-waypoint
 mission planner**, and a real-time **chase-camera feed** rendered from the sim.
 
+</div>
+
+<div align="center">
+
 ![Autonomous maritime patrol — chase cam over Chattogram port](media/demo.gif)
 
-*Autonomous mission flown in PX4 SITL, rendered in Gazebo over the real Chattogram
-port terrain, captured from the in-sim chase camera. ([full video](media/demo.mp4))*
+*Autonomous mission flown in PX4 SITL, rendered in Gazebo over the real Chattogram port terrain, captured from the in-sim chase camera. ([full video](media/demo.mp4))*
+
+</div>
 
 ---
 
