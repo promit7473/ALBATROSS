@@ -29,8 +29,8 @@ setsid bash "$ROOT/launch/launch_chattogram_clean.sh" \
 sleep 1
 echo "started: gcs server (:8080) + SITL/chase/bridge booting"
 
-# 3) Optional: QGroundControl on the dedicated :14552 link (opt-in so headless
-#    / demo runs don't pop a GUI). Enable with: LAUNCH_QGC=1 launch/start_all.sh
-if [ "${LAUNCH_QGC:-0}" = "1" ]; then
+# 3) QGroundControl -- pops up alongside Gazebo, auto-connects on :14550.
+#    On by default; set LAUNCH_QGC=0 to suppress it (e.g. headless/screenshot runs).
+if [ "${LAUNCH_QGC:-1}" = "1" ]; then
   bash "$ROOT/launch/qgc.sh"
 fi
