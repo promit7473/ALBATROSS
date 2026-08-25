@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # Gazebo feed now comes from cam_bridge.py (real onboard camera render -> MJPEG),
 # which works under Wayland/Xorg/headless. We just proxy it so the UI stays on one port.
 CAM_BRIDGE_URL = os.environ.get("CAM_BRIDGE_URL", "http://127.0.0.1:8091/video.mjpeg")
+CAM_BRIDGE2_URL = os.environ.get("CAM_BRIDGE2_URL", "http://127.0.0.1:8092/video.mjpeg")  # top-down
 
 HERE = os.path.dirname(os.path.abspath(__file__))              # <project-root>/gcs
 ROOT = os.environ.get("MARITIME_ROOT", os.path.dirname(HERE))  # <project-root> (relocatable)
@@ -29,6 +30,36 @@ KML = os.path.join(ROOT, "assets/chattogram_zones.kml")
 BASE = {"name": "Base / Port Gate", "lat": 22.318725, "lon": 91.813156}
 OP_FILE = os.path.join(HERE, "operating_area.json")   # user-drawn boundary persistence
 FC = MavlinkRestFC()
+
+# --- CAAB (Bangladesh Civil Aviation Authority) UAS rules, plugged into the sim ---
+# The two numbers from the CAAB drone guidance: max height 200 ft AGL, and no-fly
+# within 10 mi / 18.5 km of an airport. Overridable via env for other locales.
+CAAB_MAX_ALT_FT = float(os.environ.get("CAAB_MAX_ALT_FT", "200"))
+CAAB_MAX_ALT_M = round(CAAB_MAX_ALT_FT * 0.3048, 2)             # 200 ft -> 60.96 m
+CAAB_AIRPORT_RADIUS_M = float(os.environ.get("CAAB_AIRPORT_RADIUS_M", "18500"))  # 10 mi / 18.5 km
+# Nearest airport to the Chattogram operating area: Shah Amanat Intl (VGEG).
+CAAB_AIRPORTS = [{"name": "Shah Amanat Intl (VGEG)", "lat": 22.24964, "lon": 91.81306}]
+
+
+def caab_clamp_alt(a):
+    """Clamp a target altitude (m AGL) to the CAAB ceiling."""
+    try:
+        a = float(a)
+    except (TypeError, ValueError):
+        return CAAB_MAX_ALT_M
+    return min(a, CAAB_MAX_ALT_M)
+
+
+def caab_airport_hit(lat, lon):
+    """Nearest airport whose no-fly radius contains (lat,lon), else None."""
+    best = None
+    for ap in CAAB_AIRPORTS:
+        d = geo.haversine_m(lat, lon, ap["lat"], ap["lon"])
+        if d <= CAAB_AIRPORT_RADIUS_M and (best is None or d < best[1]):
+            best = (ap, d)
+    if best:
+        return {"name": best[0]["name"], "dist_m": round(best[1], 1)}
+    return None
 
 
 def load_op_area():
@@ -106,12 +137,12 @@ def plan_multi(start, waypoints, default_alt):
     clamped = []
     # route[0] is the START (home on the ground, or the live drone position when
     # airborne) so takeoff happens THERE and every user waypoint is actually flown.
-    first_alt = float(waypoints[0].get("alt", default_alt)) if waypoints else float(default_alt)
+    first_alt = caab_clamp_alt(waypoints[0].get("alt", default_alt)) if waypoints else caab_clamp_alt(default_alt)
     out = [[round(start[0], 7), round(start[1], 7), first_alt]]
     prev = (start[0], start[1])
     for idx, wp in enumerate(waypoints):
         gl = (wp["lat"], wp["lon"])
-        alt = float(wp.get("alt", default_alt))
+        alt = caab_clamp_alt(wp.get("alt", default_alt))
         if pp.is_blocked(*gl):
             clamped.append(idx)
         sub = pp.plan(prev, gl)                 # ends outside the zone if goal blocked
@@ -123,11 +154,16 @@ def plan_multi(start, waypoints, default_alt):
 
 
 def _alt_of(p, default):
-    return float(p[2]) if len(p) >= 3 else float(default)
+    a = float(p[2]) if len(p) >= 3 else float(default)
+    return caab_clamp_alt(a)            # every mission altitude respects the CAAB cap
 
 
-def route_to_mission(route, alt, rtl=True, is_airborne=False, hold_s=15.0, return_wps=None):
-    """route/return_wps items may be [lat,lon] or [lat,lon,alt] (per-waypoint height)."""
+def route_to_mission(route, alt, rtl=True, is_airborne=False, hold_s=15.0,
+                     return_wps=None, rtl_alt=None, home_lat=None, home_lon=None):
+    """route/return_wps items may be [lat,lon] or [lat,lon,alt] (per-waypoint height).
+    When rtl=True and rtl_alt is provided, the return home is built as explicit
+    waypoints (climb to rtl_alt, fly home, descend, land) so the altitude is
+    guaranteed and does not depend on the RTL_RETURN_ALT PX4 parameter."""
     items = []
     if not is_airborne and len(route) > 0:
         items.append({"command": "MAV_CMD_NAV_TAKEOFF", "lat": route[0][0],
@@ -138,18 +174,21 @@ def route_to_mission(route, alt, rtl=True, is_airborne=False, hold_s=15.0, retur
 
     n_out = len(wps)
     for i, p in enumerate(wps):
-        # hold at the final outbound waypoint (over target) so it hovers visibly
         is_last_out = (i == n_out - 1) and not return_wps
         hold = hold_s if is_last_out else 0.0
         items.append({"command": "MAV_CMD_NAV_WAYPOINT", "lat": p[0], "lon": p[1],
                       "alt": _alt_of(p, alt), "p1": hold})
 
-    # optional user-designed return legs (each with its own height)
     for p in (return_wps or []):
         items.append({"command": "MAV_CMD_NAV_WAYPOINT", "lat": p[0], "lon": p[1],
                       "alt": _alt_of(p, alt), "p1": 0.0})
 
-    if rtl:
+    if rtl and rtl_alt is not None and home_lat is not None and home_lon is not None:
+        items.append({"command": "MAV_CMD_NAV_WAYPOINT", "lat": home_lat,
+                      "lon": home_lon, "alt": caab_clamp_alt(rtl_alt), "p1": 0.0})
+        items.append({"command": "MAV_CMD_NAV_LAND", "lat": home_lat,
+                      "lon": home_lon, "alt": 0.0})
+    elif rtl:
         items.append({"command": "MAV_CMD_NAV_RETURN_TO_LAUNCH",
                       "frame": "MAV_FRAME_MISSION", "lat": 0, "lon": 0, "alt": 0})
     return items
@@ -173,7 +212,14 @@ class H(BaseHTTPRequestHandler):
     def _static(self, path, ctype):
         try:
             with open(path, "rb") as f:
-                self._send(200, f.read(), ctype)
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            # dev UI: always serve the latest asset, never a stale cached copy
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(body)
         except FileNotFoundError:
             self._send(404, {"error": "not found"})
 
@@ -190,9 +236,16 @@ class H(BaseHTTPRequestHandler):
         elif p == "/intelis_logo.svg":
             self._static(os.path.join(WEB, "intelis_logo.svg"), "image/svg+xml")
         elif p == "/video.mjpeg":
-            return self._stream_video()
+            return self._stream_video(CAM_BRIDGE_URL)
+        elif p == "/video2.mjpeg":
+            return self._stream_video(CAM_BRIDGE2_URL)
         elif p == "/api/kml":
             self._send(200, GEOJSON)
+        elif p == "/api/caab":
+            self._send(200, {
+                "max_alt_ft": CAAB_MAX_ALT_FT, "max_alt_m": CAAB_MAX_ALT_M,
+                "airport_radius_m": CAAB_AIRPORT_RADIUS_M, "airports": CAAB_AIRPORTS,
+                "base_in_airport_nofly": caab_airport_hit(BASE["lat"], BASE["lon"])})
         elif p == "/api/operating_area":
             self._send(200, load_op_area())
         elif p == "/api/telemetry":
@@ -200,10 +253,10 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
 
-    def _stream_video(self):
+    def _stream_video(self, url=CAM_BRIDGE_URL):
         """Proxy the MJPEG feed from cam_bridge.py (real Gazebo camera render)."""
         try:
-            up = urllib.request.urlopen(CAM_BRIDGE_URL, timeout=5)
+            up = urllib.request.urlopen(url, timeout=5)
         except Exception as e:
             return self._send(503, {"error": f"camera bridge not up: {e}. "
                                     "Launch SITL (starts cam_bridge automatically)."})
@@ -258,11 +311,24 @@ class H(BaseHTTPRequestHandler):
             hold_s = body.get("hold_s", 15.0)
             return_wps = body.get("return_wps")
             rtl_alt = body.get("rtl_alt")
-            if rtl_alt:                       # adjustable auto-RTL return altitude
-                FC.set_param("RTL_RETURN_ALT", float(rtl_alt))
+            home_lat = body.get("home_lat")
+            home_lon = body.get("home_lon")
+            if not home_lat or not home_lon:
+                t = FC.telemetry()
+                home_lat = t.get("lat", 22.318725)
+                home_lon = t.get("lon", 91.813156)
             items = route_to_mission(route, alt, rtl=rtl, is_airborne=is_airborne,
-                                     hold_s=hold_s, return_wps=return_wps)
+                                     hold_s=hold_s, return_wps=return_wps,
+                                     rtl_alt=float(rtl_alt) if rtl and rtl_alt else None,
+                                     home_lat=home_lat if rtl and rtl_alt else None,
+                                     home_lon=home_lon if rtl and rtl_alt else None)
             res = FC.upload_mission(items)
+            # flag if any requested altitude was pulled down to the CAAB ceiling
+            raw = [float(p[2]) for p in route if len(p) >= 3] + [float(alt)]
+            if rtl and rtl_alt:
+                raw.append(float(rtl_alt))
+            if isinstance(res, dict) and raw and max(raw) > CAAB_MAX_ALT_M:
+                res["alt_capped_to_m"] = CAAB_MAX_ALT_M
             print(f"[gcs] mission upload: {res}")
             self._send(200, res)
         elif p == "/api/command":
@@ -272,10 +338,11 @@ class H(BaseHTTPRequestHandler):
             elif cmd == "rtl": FC.rtl()
             elif cmd == "stop_mission": FC.stop_mission()
             elif cmd == "start_mission": FC.start_mission()
+            elif cmd == "continue_mission": FC.continue_mission()
             elif cmd == "reposition":
                 lat = body.get("lat")
                 lon = body.get("lon")
-                alt = body.get("alt", 40)
+                alt = caab_clamp_alt(body.get("alt", 40))   # respect the CAAB ceiling
                 # never fly direct into or across a no-fly zone
                 pp = get_planner()
                 if pp.is_blocked(lat, lon):
@@ -286,6 +353,9 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": False, "reason": "path_blocked",
                         "error": "Direct path crosses a no-fly zone. Use Plan route (it detours)."})
                 FC.reposition(lat, lon, alt)
+            elif cmd == "set_speed":
+                speed = max(0.5, min(30.0, float(body.get("speed", 5.0))))
+                FC.set_speed(speed)
             elif cmd in ("drop", "release_buoy"):
                 ch = body.get("channel", 1)
                 pwm = body.get("pwm", 2000)

@@ -1,6 +1,8 @@
 /* Maritime GCS — live map, draw/edit boundary, plan+upload mission, 2D+3D */
 const $ = id => document.getElementById(id);
 let BASE = { lat: 22.318725, lon: 91.813156 };
+// CAAB rules (filled from /api/caab): altitude ceiling + airport no-fly radius.
+let CAAB = { max_alt_ft: 200, max_alt_m: 60.96, airport_radius_m: 18500, airports: [] };
 
 // ================= LIVE DRONE STATE (updated every tick) =================
 let currentDroneLL = null;   // [lat, lon] from telemetry
@@ -11,6 +13,23 @@ let droneRelAlt = 0;
 const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([22.31, 91.81], 12);
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   { maxZoom: 19 }).addTo(map);
+// map lives in a flex grid cell — make sure Leaflet picks up the real size
+setTimeout(() => map.invalidateSize(), 0);
+window.addEventListener('resize', () => map.invalidateSize());
+
+// -------- theme (light / dark) toggle, persisted --------
+(function initTheme() {
+  const chk = $('theme-chk'); if (!chk) return;
+  const q = new URLSearchParams(location.search).get('theme');
+  if (q === 'light' || q === 'dark') localStorage.setItem('gcs-theme', q);
+  const light = localStorage.getItem('gcs-theme') === 'light';
+  document.body.classList.toggle('theme-light', light); chk.checked = light;
+  chk.onchange = () => {
+    const on = chk.checked;
+    document.body.classList.toggle('theme-light', on);
+    localStorage.setItem('gcs-theme', on ? 'light' : 'dark');
+  };
+})();
 
 function setActive(id, on) { const b = $(id); if (b) b.classList.toggle('active', on); }
 function haversineKm(a, b) {
@@ -57,6 +76,37 @@ fetch('/api/kml').then(r => r.json()).then(g => {
   });
 });
 
+// -------- CAAB compliance overlay (altitude ceiling + airport no-fly circles) --------
+fetch('/api/caab').then(r => r.json()).then(c => {
+  CAAB = c;
+  const capM = Math.floor(c.max_alt_m);   // whole-metre ceiling for the UI inputs
+  ['alt', 'alt-slider', 'rtl-alt'].forEach(id => {
+    const el = $(id); if (el) { el.max = capM; if (+el.value > capM) el.value = capM; }
+  });
+  // draw each airport no-fly circle on the 2D map (amber, dashed)
+  const caabCircles = [];
+  (c.airports || []).forEach(ap => {
+    const circ = L.circle([ap.lat, ap.lon], { radius: c.airport_radius_m, color:'#f59e0b', weight:2,
+      dashArray:'8 6', fill:true, fillColor:'#f59e0b', fillOpacity:0.06 })
+      .addTo(map).bindTooltip(`CAAB no-fly · ${ap.name} (${(c.airport_radius_m/1000).toFixed(1)} km)`, { sticky:true });
+    L.circleMarker([ap.lat, ap.lon], { radius:5, color:'#f59e0b', fillColor:'#fbbf24', fillOpacity:1, weight:2 })
+      .addTo(map).bindTooltip(ap.name);
+    caabCircles.push(circ);
+  });
+  // ?view=caab -> frame the whole no-fly extent (compliance overview shot)
+  if (new URLSearchParams(location.search).get('view') === 'caab' && caabCircles.length) {
+    setTimeout(() => { try { map.fitBounds(L.featureGroup(caabCircles).getBounds().pad(0.08)); } catch(e){} }, 350);
+  }
+  // compliance banner
+  const el = $('caab-info');
+  if (el) {
+    let msg = `≤ ${c.max_alt_ft} ft (${capM} m) AGL · no-fly within ${(c.airport_radius_m/1000).toFixed(1)} km of airports`;
+    if (c.base_in_airport_nofly)
+      msg += ` · ⚠️ base ${(c.base_in_airport_nofly.dist_m/1000).toFixed(1)} km from ${c.base_in_airport_nofly.name} — authorization required`;
+    el.innerHTML = msg;
+  }
+});
+
 map.pm.setGlobalOptions({ snappable: true, allowSelfIntersection: false });
 map.pm.setPathOptions(OP_STYLE);
 $('btn-draw').onclick = () => { if (opLayer && opLayer.pm) opLayer.pm.disable(); setActive('btn-edit', false);
@@ -79,7 +129,7 @@ $('btn-save').onclick = () => {
 let waypoints = [];        // [{ ll:[lat,lon], alt, marker }]
 let routeLL = null, routeLine = null, addMode = false;
 
-function wpAlt() { return Math.max(5, Math.min(200, Math.round(+$('alt').value || 45))); }
+function wpAlt() { return Math.max(5, Math.min(CAAB.max_alt_m, Math.round(+$('alt').value || 45))); }
 function numberIcon(n) {
   return L.divIcon({ className:'', iconSize:[26,26], iconAnchor:[13,13],
     html:`<div style="width:24px;height:24px;border-radius:50%;background:#38bdf8;color:#04263b;
@@ -171,13 +221,14 @@ $('btn-upload').onclick = async () => {
   if (!routeLL) { $('mission-info').innerHTML = '⚠️ Add waypoints → <b>Plan route</b> first'; return; }
   $('mission-info').textContent = 'Uploading mission to flight controller…';
   const rtl = $('chk-rtl').checked;
-  const rtlAlt = Math.max(10, Math.min(200, +$('rtl-alt').value || 60));
+  const rtlAlt = Math.max(10, Math.min(CAAB.max_alt_m, +$('rtl-alt').value || 60));
   const isAirborne = droneIsArmed && droneRelAlt > 2.0;
   try {
     const r = await (await fetch('/api/mission/upload', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ route: routeLL, alt: wpAlt(), rtl, rtl_alt: rtlAlt, is_airborne: isAirborne, hold_s: 15.0 }) })).json();
+      body: JSON.stringify({ route: routeLL, alt: wpAlt(), rtl, rtl_alt: rtlAlt, is_airborne: isAirborne, hold_s: 15.0, home_lat: BASE.lat, home_lon: BASE.lon }) })).json();
     if (r.ok) {
-      $('mission-info').innerHTML = `✓ Mission uploaded (<b>${r.count}</b> items · RTL ${rtl ? ('@ '+rtlAlt+' m') : 'off'}) · Click <b>Arm</b> then <b>Start</b>`;
+      const cap = r.alt_capped_to_m ? ` · <span style="color:#f59e0b;">⚠️ altitude capped to CAAB ${Math.floor(r.alt_capped_to_m)} m</span>` : '';
+      $('mission-info').innerHTML = `✓ Mission uploaded (<b>${r.count}</b> items · RTL ${rtl ? ('@ '+Math.round(rtlAlt)+' m') : 'off'})${cap} · Click <b>Arm</b> then <b>Start</b>`;
     } else {
       $('mission-info').innerHTML = `<span style="color:#ef4444;">⚠️ Upload failed (${r.error}). Is SITL running?</span>`;
     }
@@ -233,27 +284,57 @@ $('btn-goto').onclick = async () => {
   }
 };
 
-// -------- DYNAMIC ALTITUDE CHANGE --------
+// -------- ALTITUDE selector (target height for new WPs + Alt-Hold) --------
+// The slider only SETS the target now — it no longer auto-commands the drone (that
+// used to reposition-hold it, stopping the mission). Use "Alt Hold" to apply it live.
 const altNum = $('alt'), altSlider = $('alt-slider');
-let altChangeTimeout = null;
 function syncAlt(v) {
-  v = Math.max(5, Math.min(200, Math.round(+v || 45)));
+  v = Math.max(5, Math.min(Math.floor(CAAB.max_alt_m), Math.round(+v || 45)));
   altNum.value = v;
   altSlider.value = v;
-  // If drone is flying, push altitude change after a short debounce
-  if (droneIsArmed && droneRelAlt > 2.0) {
-    clearTimeout(altChangeTimeout);
-    altChangeTimeout = setTimeout(() => {
-      // Use reposition to current lat/lon but new altitude
-      if (currentDroneLL) {
-        cmdPost({ cmd: 'reposition', lat: currentDroneLL[0], lon: currentDroneLL[1], alt: v });
-        $('mission-info').innerHTML = `📐 <b>Altitude change → ${v}m</b> commanded`;
-      }
-    }, 600); // 600ms debounce so slider dragging doesn't spam commands
-  }
 }
 altNum.oninput = () => syncAlt(altNum.value);
 altSlider.oninput = () => syncAlt(altSlider.value);
+
+// -------- ALT HOLD: climb/descend to the selected altitude & loiter here --------
+$('btn-alt-hold').onclick = async () => {
+  if (!currentDroneLL) { $('mission-info').innerHTML = '⚠️ No drone position yet (is SITL up & armed?)'; return; }
+  const alt = wpAlt();
+  $('mission-info').innerHTML = `⬍ Holding at current position → ${alt} m…`;
+  try {
+    const r = await (await cmdPost({ cmd:'reposition', lat: currentDroneLL[0], lon: currentDroneLL[1], alt })).json();
+    $('mission-info').innerHTML = r.ok
+      ? `⬍ <b>Alt-hold @ ${alt} m</b> (loitering here) — press <b>Proceed</b> to resume the mission`
+      : `<span style="color:#ef4444;">⚠️ ${r.error || 'hold failed'}</span>`;
+  } catch(e) { $('mission-info').innerHTML = `<span style="color:#ef4444;">⚠️ ${e.message}</span>`; }
+};
+
+// -------- PROCEED: resume the uploaded mission from the current item --------
+$('btn-proceed').onclick = async () => {
+  $('mission-info').innerHTML = '▶ Resuming mission…';
+  try {
+    const r = await (await cmdPost({ cmd:'continue_mission' })).json();
+    $('mission-info').innerHTML = r.ok
+      ? '▶ <b>Proceeding</b> — mission resumed (AUTO.MISSION)'
+      : `<span style="color:#ef4444;">⚠️ ${r.error || 'resume failed'}</span>`;
+  } catch(e) { $('mission-info').innerHTML = `<span style="color:#ef4444;">⚠️ ${e.message}</span>`; }
+};
+
+// -------- TARGET GROUND-SPEED (safe to apply live — doesn't stop the mission) --------
+const spdNum = $('spd'), spdSlider = $('spd-slider');
+let spdChangeTimeout = null;
+function syncSpeed(v) {
+  v = Math.max(1, Math.min(20, Math.round(+v || 5)));
+  spdNum.value = v;
+  spdSlider.value = v;
+  clearTimeout(spdChangeTimeout);
+  spdChangeTimeout = setTimeout(() => {
+    cmdPost({ cmd: 'set_speed', speed: v });
+    $('mission-info').innerHTML = `🚤 <b>Target speed → ${v} m/s</b> commanded`;
+  }, 500);   // debounce so slider dragging doesn't spam commands
+}
+spdNum.oninput = () => syncSpeed(spdNum.value);
+spdSlider.oninput = () => syncSpeed(spdSlider.value);
 
 // ================= 3D VIEW (Cesium) =================
 let viewer = null, cesReady = false, cesDrone = null, cesRoute = null, cesTrail = [], cesTrailEnt = null;
@@ -279,6 +360,16 @@ function init3D() {
       viewer.entities.add({ polygon: { hierarchy: Cesium.Cartesian3.fromDegreesArray(ring), material: Cesium.Color.RED.withAlpha(0.3) } });
     }
   }));
+  // CAAB airport no-fly circle(s) on the globe
+  fetch('/api/caab').then(r=>r.json()).then(c => (c.airports || []).forEach(ap => {
+    viewer.entities.add({ position: Cesium.Cartesian3.fromDegrees(ap.lon, ap.lat),
+      ellipse: { semiMajorAxis: c.airport_radius_m, semiMinorAxis: c.airport_radius_m,
+        material: Cesium.Color.fromCssColorString('#f59e0b').withAlpha(0.10),
+        outline: true, outlineColor: Cesium.Color.fromCssColorString('#f59e0b'), height: 0 },
+      label: { text: `CAAB no-fly (${(c.airport_radius_m/1000).toFixed(1)} km)`, font: '11px sans-serif',
+        fillColor: Cesium.Color.fromCssColorString('#fbbf24'), showBackground: true,
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.5) } });
+  }));
   cesDrone = viewer.entities.add({
     position: new Cesium.CallbackProperty(() => cesDronePos, false),
     orientation: new Cesium.CallbackProperty(() =>
@@ -288,11 +379,12 @@ function init3D() {
     label: { text: 'UAV', font: 'bold 12px sans-serif', pixelOffset: new Cesium.Cartesian2(0, -34),
       fillColor: Cesium.Color.YELLOW, showBackground: true, backgroundColor: Cesium.Color.BLACK.withAlpha(0.5),
       disableDepthTestDistance: Number.POSITIVE_INFINITY } });
+  cesDronePos = Cesium.Cartesian3.fromDegrees(BASE.lon, BASE.lat, 0);
   cesReady = true;
   viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(BASE.lon, BASE.lat - 0.025, 3000),
     orientation: { heading: 0, pitch: Cesium.Math.toRadians(-32), roll: 0 } });
 }
-let cesDronePos = Cesium.Cartesian3.fromDegrees(BASE.lon, BASE.lat, 0), cesDroneHdg = 0;
+let cesDronePos = null, cesDroneHdg = 0;
 let cesFollowing = false;
 
 function toggle3DFollow(force) {
@@ -309,7 +401,13 @@ function toggle3DFollow(force) {
 $('btn-3d-follow').onclick = () => toggle3DFollow();
 
 $('btn-3d').onclick = () => {
-  $('cesium-wrap').classList.add('on'); init3D();
+  const wrap = $('cesiumContainer');
+  const on = !wrap.classList.contains('on');
+  wrap.classList.toggle('on', on);
+  $('ces-tools').classList.toggle('on', on);
+  $('btn-3d').classList.toggle('active', on);
+  if (!on) { toggle3DFollow(false); return; }        // back to the 2D map
+  init3D();
   setTimeout(() => {
     if (viewer) {
       viewer.resize();
@@ -325,41 +423,31 @@ $('btn-3d').onclick = () => {
       width: 4, material: Cesium.Color.fromCssColorString('#38bdf8'), clampToGround: false } });
   }
 };
-$('btn-2d').onclick = () => { $('cesium-wrap').classList.remove('on'); toggle3DFollow(false); };
-
-// -------- Gazebo live video feed --------
-$('btn-feed').onclick = () => {
-  const panel = $('feed-panel'), img = $('feed-img'), on = !panel.classList.contains('on');
-  panel.classList.toggle('on', on);
-  if (on) {
-    fetch('/api/gazebo/follow', { method: 'POST' }); // ensure Gazebo camera tracks the drone
-  }
-  img.src = on ? ('/video.mjpeg?' + Date.now()) : '';
+$('btn-2d').onclick = () => {
+  $('cesiumContainer').classList.remove('on');
+  $('ces-tools').classList.remove('on');
+  $('btn-3d').classList.remove('active');
+  toggle3DFollow(false);
 };
-$('feed-close').onclick = () => { $('feed-panel').classList.remove('on'); $('feed-img').src = ''; };
 
-// -------- draggable + resizable windows (feed + 3D) --------
-function makeDraggable(winId, onResize) {
-  const win = $(winId), bar = win.querySelector('.win-bar');
-  let sx, sy, sl, st, dragging = false;
-  bar.addEventListener('mousedown', e => {
-    if (e.target.closest('button, .win-x')) return;      // don't drag when hitting a control
-    const r = win.getBoundingClientRect();
-    win.style.left = r.left + 'px'; win.style.top = r.top + 'px';
-    win.style.right = 'auto'; win.style.bottom = 'auto';
-    sx = e.clientX; sy = e.clientY; sl = r.left; st = r.top; dragging = true;
-    e.preventDefault();
-  });
-  window.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    win.style.left = Math.max(0, sl + e.clientX - sx) + 'px';
-    win.style.top  = Math.max(0, st + e.clientY - sy) + 'px';
-  });
-  window.addEventListener('mouseup', () => { dragging = false; });
-  if (onResize && 'ResizeObserver' in window) new ResizeObserver(onResize).observe(win);
+// -------- inline camera feeds (chase + fpv) --------
+function makeCamToggle(btnId, imgId, url, onStart) {
+  const btn = $(btnId), img = $(imgId);
+  btn.onclick = () => {
+    const on = !btn.classList.contains('active');
+    btn.classList.toggle('active', on);
+    btn.textContent = on ? '⏸ stop' : '▶ start';
+    if (on && onStart) onStart();
+    img.src = on ? (url + '?' + Date.now()) : '';
+  };
 }
-makeDraggable('feed-panel');
-makeDraggable('cesium-wrap', () => { if (viewer) viewer.resize(); });
+makeCamToggle('btn-feed', 'feed-img', '/video.mjpeg',
+  () => fetch('/api/gazebo/follow', { method: 'POST' }));   // chase cam tracks the drone
+makeCamToggle('btn-feed2', 'feed2-img', '/video2.mjpeg');   // fpv (forward, angled down)
+// ?feeds=on -> auto-start both camera feeds (handy for demos/screenshots)
+if (new URLSearchParams(location.search).get('feeds') === 'on') {
+  ['btn-feed', 'btn-feed2'].forEach(id => { const b = $(id); if (b && !b.classList.contains('active')) b.click(); });
+}
 
 // ================= TELEMETRY =================
 let droneMarker = null, trail = null, trailPts = [];
@@ -370,17 +458,97 @@ const modeName = c => { const main=(c>>>16)&0xff, sub=(c>>>24)&0xff;
   const M={1:'MANUAL',2:'ALTCTL',3:'POSCTL',4:'AUTO',5:'ACRO',6:'OFFBOARD',7:'STAB'};
   const A={1:'READY',2:'TAKEOFF',3:'HOLD',4:'MISSION',5:'RTL',6:'LAND',8:'FOLLOW',9:'PRECLAND'};
   return main===4 ? 'AUTO.'+(A[sub]||sub) : (M[main]||('mode '+main)); };
+// -------- flight status panel (timer, distance-to-base, max alt, battery) --------
+let flightStart = null, maxAltSeen = 0;
+function updateStatus(t) {
+  // flight timer: runs while armed, resets on disarm
+  if (t.armed) { if (flightStart == null) flightStart = Date.now(); }
+  else { flightStart = null; maxAltSeen = 0; }
+  if (flightStart != null) {
+    const s = Math.floor((Date.now() - flightStart) / 1000);
+    $('st-time').textContent = String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+  } else {
+    $('st-time').textContent = '00:00';
+  }
+
+  // distance from base
+  if (t.lat != null && t.lon != null) {
+    const km = haversineKm([BASE.lat, BASE.lon], [t.lat, t.lon]);
+    $('st-dist').textContent = km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(2) + ' km';
+  } else { $('st-dist').textContent = '—'; }
+
+  // max altitude reached this flight
+  if (t.rel_alt != null) maxAltSeen = Math.max(maxAltSeen, t.rel_alt);
+  $('st-maxalt').textContent = maxAltSeen > 0 ? maxAltSeen.toFixed(1) + ' m' : '—';
+
+  $('st-sats').textContent = (t.sats != null) ? t.sats : '—';
+
+  // battery bar
+  const pct = (t.battery_pct != null && t.battery_pct >= 0) ? t.battery_pct : null;
+  const fill = $('st-batt-fill');
+  if (pct != null) {
+    $('st-batt').textContent = pct + '%' + (t.battery_v != null ? ` · ${t.battery_v.toFixed(1)} V` : '');
+    fill.style.width = pct + '%';
+    fill.className = pct <= 20 ? 'crit' : (pct <= 40 ? 'warn' : '');
+  } else {
+    $('st-batt').textContent = (t.battery_v != null) ? t.battery_v.toFixed(1) + ' V' : '—';
+    fill.style.width = '0%'; fill.className = '';
+  }
+}
+
+// Displayed heading: the vehicle yaw (hdg) doesn't track travel in this sim, so use
+// course-over-ground from the NED velocity vector when moving; fall back to hdg slow.
+let lastHeading = 0;
+function dispHeading(t) {
+  if (t.vx != null && t.vy != null && Math.hypot(t.vx, t.vy) > 0.6) {
+    lastHeading = (Math.atan2(t.vy, t.vx) * 180 / Math.PI + 360) % 360;
+  } else if (t.hdg != null) {
+    lastHeading = t.hdg;
+  }
+  return lastHeading;
+}
+
 async function tick() {
   let t; try { t = await (await fetch('/api/telemetry')).json(); } catch(e) { t = { connected:false }; }
   $('conn').textContent = t.connected ? 'LINK' : 'NO LINK'; $('conn').className = 'pill ' + (t.connected?'on':'off');
+  const H = t.connected ? dispHeading(t) : null;   // course-over-ground heading
   $('mode').textContent  = (t.custom_mode!=null) ? modeName(t.custom_mode) : '—';
   $('armed').textContent = (t.armed==null)?'—':(t.armed?'ARMED':'disarmed'); $('armed').style.color = t.armed?'#7ff0ac':'#ff9c9c';
   $('relalt').textContent = (t.rel_alt!=null)?t.rel_alt.toFixed(1)+' m':'—';
   $('gspd').textContent   = (t.groundspeed!=null)?t.groundspeed.toFixed(1)+' m/s':'—';
-  $('hdg').textContent    = (t.hdg!=null)?Math.round(t.hdg)+'°':'—';
+  $('hdg').textContent    = (H!=null)?Math.round(H)+'°':'—';
   $('batt').textContent   = (t.battery_v!=null)?t.battery_v.toFixed(1)+' V'+(t.battery_pct!=null&&t.battery_pct>=0?` (${t.battery_pct}%)`:''):'—';
   $('gps').textContent    = (t.sats!=null)?`${t.sats} sats`+(t.fix?` / ${String(t.fix).replace('GPS_FIX_TYPE_','')}`:''):'—';
   $('ll').textContent     = (t.lat!=null)?`${t.lat.toFixed(6)}, ${t.lon.toFixed(6)}`:'—';
+
+  // ---- header dashboard readouts ----
+  const gs = (t.groundspeed!=null) ? t.groundspeed : null;
+  $('d-gspd').textContent  = (gs!=null)?gs.toFixed(1)+' m/s':'—';
+  $('d-alt').textContent   = (t.rel_alt!=null)?t.rel_alt.toFixed(1)+' m':'—';
+  $('d-climb').textContent = (t.climb!=null)?(t.climb>=0?'+':'')+t.climb.toFixed(1)+' m/s':'—';
+  $('d-hdg').textContent   = (H!=null)?Math.round(H)+'°':'—';
+  $('d-mode').textContent  = (t.custom_mode!=null)?modeName(t.custom_mode):'—';
+  $('d-batt').textContent  = (t.battery_v!=null)?t.battery_v.toFixed(1)+' V':'—';
+
+  // ---- orientation compass (rotates to travel heading) ----
+  if (H != null) {
+    $('cmp-needle').setAttribute('transform', `rotate(${H} 60 60)`);
+    $('cmp-hdg').textContent = Math.round(H) + '°';
+  }
+
+  // ---- attitude indicator (roll + pitch, artificial horizon) ----
+  if (t.roll != null && t.pitch != null) {
+    const px = Math.max(-40, Math.min(40, t.pitch)) * 1.1;   // px offset per degree
+    $('adi-move').setAttribute('transform', `rotate(${-t.roll} 50 50) translate(0 ${px})`);
+  }
+
+  // ---- velocity gauge (left panel) ----
+  const v = (gs!=null) ? gs : 0;
+  $('vel-big').textContent = v.toFixed(1);
+  $('vel-fill').style.width = Math.max(0, Math.min(100, (v / 20) * 100)) + '%';  // scale 0–20 m/s
+
+  // ---- flight status panel ----
+  updateStatus(t);
 
   // ---- UPDATE GLOBAL DRONE STATE ----
   if (t.lat != null && t.lon != null) {
@@ -391,11 +559,15 @@ async function tick() {
 
   if (t.lat!=null && t.lon!=null) {
     const ll = [t.lat, t.lon];
-    droneMarker ? (droneMarker.setLatLng(ll), droneMarker.setIcon(droneIcon(t.hdg||0)))
-                : (droneMarker = L.marker(ll, { icon: droneIcon(t.hdg||0), zIndexOffset:1000 }).addTo(map));
+    const iconHdg = (H != null) ? H : (t.hdg || 0);
+    droneMarker ? (droneMarker.setLatLng(ll), droneMarker.setIcon(droneIcon(iconHdg)))
+                : (droneMarker = L.marker(ll, { icon: droneIcon(iconHdg), zIndexOffset:1000 }).addTo(map));
     const alt = (t.rel_alt!=null && t.rel_alt>0) ? t.rel_alt : 0;
-    cesDronePos = Cesium.Cartesian3.fromDegrees(t.lon, t.lat, alt);
-    cesDroneHdg = (t.hdg != null) ? t.hdg : cesDroneHdg;
+    // 3D is optional — never let a missing/slow Cesium break the 2D map + telemetry
+    if (cesReady && window.Cesium) {
+      cesDronePos = Cesium.Cartesian3.fromDegrees(t.lon, t.lat, alt);
+      cesDroneHdg = (H != null) ? H : cesDroneHdg;
+    }
     if (t.rel_alt!=null && t.rel_alt>0.5) {
       trailPts.push(ll); if (trailPts.length>2000) trailPts.shift();
       trail ? trail.setLatLngs(trailPts) : (trail = L.polyline(trailPts, { color:'#facc15', weight:2, opacity:.8 }).addTo(map));
