@@ -42,8 +42,8 @@ TD_YAW = float(os.environ.get("TOPDOWN_YAW", "0.0"))        # rad; 0 = north-up
 # ground ahead. That's what separates it from the CHASE cam (drone framed from
 # behind). Paired with the wide (~115 deg) lens on topdown_cam.
 FPV_PITCH = math.radians(float(os.environ.get("FPV_PITCH_DEG", "15.0")))  # downtilt from horizon
-FPV_FWD = float(os.environ.get("FPV_FWD", "0.35"))    # metres AHEAD of the drone (onboard feel)
-FPV_UP = float(os.environ.get("FPV_UP", "0.15"))      # metres above the drone
+FPV_FWD = float(os.environ.get("FPV_FWD", "0.5"))     # metres AHEAD of the drone (clears the body)
+FPV_UP = float(os.environ.get("FPV_UP", "0.2"))       # metres above the drone
 FPV_YAW0 = float(os.environ.get("FPV_YAW0", "0.0"))   # rad; heading to use while idle/hovering
 # Live view switch for the 2nd feed: a file whose contents ("topdown"/"fpv")
 # override CAM_MODE each tick, so the web UI can toggle this camera live.
@@ -104,6 +104,7 @@ class ChaseCam:
         self.set_pose_srv = f"/world/{WORLD}/set_pose"
         self.lock = threading.Lock()
         self.dpos = None           # smoothed drone position [x,y,z]
+        self.dpos_raw = None       # latest RAW drone position (for the onboard FPV cam)
         self.head = None           # smoothed travel-heading unit vec (hx,hy)
         self.cam = None            # eased camera position [x,y,z]
         self.prev = None           # (t,x,y) for velocity (dynamic topic only)
@@ -150,6 +151,7 @@ class ChaseCam:
         now = time.monotonic()
         px, py, pz = p.position.x, p.position.y, p.position.z
         with self.lock:
+            self.dpos_raw = [px, py, pz]     # unsmoothed -> onboard FPV cam can't lag
             # position: pose/info only refreshes when dynamic_pose is quiet (idle)
             if dynamic or (now - self.last_dyn) > 0.5:
                 if self.dpos is None:
@@ -193,6 +195,7 @@ class ChaseCam:
     def tick(self):
         with self.lock:
             d = list(self.dpos) if self.dpos else None
+            draw = list(self.dpos_raw) if self.dpos_raw else None
             head = list(self.head) if self.head else None
             cam = list(self.cam) if self.cam else None
         if d is None:
@@ -209,32 +212,29 @@ class ChaseCam:
                 cam[2] += CAM_EASE * (tz - cam[2])
             qw, qx, qy, qz = rpy_to_quat(0.0, math.pi / 2, TD_YAW)  # +X -> straight down
         elif mode == "fpv":
-            # onboard nose-cam: sit just AHEAD of + above the drone and look
-            # FORWARD along the (smoothed) travel heading, tilted down FPV_PITCH.
-            # The drone stays BEHIND the camera -> out of frame -> a true
-            # "where it's going" view (distinct from the chase cam).
+            # onboard nose-cam RIGIDLY mounted to the drone: sit FPV_FWD ahead of +
+            # FPV_UP above the RAW drone position and look forward along the
+            # (smoothed) travel heading, tilted down FPV_PITCH. Because the camera
+            # snaps to the real drone position every tick (no smoothing/easing lag),
+            # the drone is ALWAYS FPV_FWD behind the camera -> never enters frame,
+            # even in fast forward flight. (The old easing let it drift into view.)
+            base = draw if draw is not None else d
             if head is not None and math.hypot(*head) > 1e-3:
                 yaw = math.atan2(head[1], head[0])
             elif self.cyaw is not None:
                 yaw = self.cyaw                      # hover: hold last heading
             else:
                 yaw = FPV_YAW0
-            # low-pass the heading (shortest-path wrap) to kill yaw jitter
+            # low-pass ONLY the look heading (shortest-path wrap) to kill yaw jitter
             if self.cyaw is None:
                 self.cyaw = yaw
             else:
                 dyaw = (yaw - self.cyaw + math.pi) % (2 * math.pi) - math.pi
                 self.cyaw += ORI_SMOOTH * dyaw
             yaw = self.cyaw
-            tx = d[0] + FPV_FWD * math.cos(yaw)      # AHEAD of the drone
-            ty = d[1] + FPV_FWD * math.sin(yaw)
-            tz = d[2] + FPV_UP
-            if cam is None:
-                cam = [tx, ty, tz]
-            else:
-                cam[0] += CAM_EASE * (tx - cam[0])
-                cam[1] += CAM_EASE * (ty - cam[1])
-                cam[2] += CAM_EASE * (tz - cam[2])
+            cam = [base[0] + FPV_FWD * math.cos(yaw),   # snap ahead of the real drone
+                   base[1] + FPV_FWD * math.sin(yaw),
+                   base[2] + FPV_UP]
             qw, qx, qy, qz = rpy_to_quat(0.0, FPV_PITCH, yaw)  # forward + down-tilt
         else:
             # chase: sit behind the smoothed travel heading, else hold the spot
