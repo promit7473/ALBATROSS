@@ -10,10 +10,18 @@
 # Usage: launch/qgc.sh
 set -u
 
-QGC="${QGC_APPIMAGE:-$HOME/QGroundControl.AppImage}"
+# Pick a runnable AppImage. The generic "QGroundControl.AppImage" is a newer build
+# that needs GLIBC 2.38 (fails on Ubuntu 22.04 / glibc 2.35), so prefer the stable
+# v4.4.5 build which runs here. Override with QGC_APPIMAGE=/path if needed.
+QGC="${QGC_APPIMAGE:-}"
+if [ -z "$QGC" ]; then
+  for c in "$HOME/QGroundControl-v4.4.5.AppImage" "$HOME/QGroundControl.AppImage"; do
+    [ -x "$c" ] && { QGC="$c"; break; }
+  done
+fi
 
-if [ ! -x "$QGC" ]; then
-  echo "QGroundControl not found/executable at: $QGC" >&2
+if [ -z "$QGC" ] || [ ! -x "$QGC" ]; then
+  echo "QGroundControl AppImage not found/executable (looked for v4.4.5, then generic)." >&2
   echo "Set QGC_APPIMAGE=/path/to/QGroundControl.AppImage or chmod +x it." >&2
   exit 1
 fi
