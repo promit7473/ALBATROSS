@@ -36,15 +36,18 @@ DIST = float(os.environ.get("CHASE_DIST", "2.8"))      # metres behind the drone
 HEIGHT = float(os.environ.get("CHASE_HEIGHT", "1.2"))  # metres above the drone (chase)
 TD_HEIGHT = float(os.environ.get("TOPDOWN_HEIGHT", "45.0"))  # metres above drone (nadir)
 TD_YAW = float(os.environ.get("TOPDOWN_YAW", "0.0"))        # rad; 0 = north-up
-# FPV / onboard-style angled view: sit above+behind the drone and look FORWARD
-# along travel heading, tilted down FPV_PITCH_DEG. Paired with the wide (~115 deg)
-# lens on topdown_cam, this puts the horizon in the upper frame and lots of
-# ground ahead -- a nose-mounted drone-cam look. Raise FPV_PITCH_DEG toward 45
-# for a steeper "looking down the nose" feel.
-FPV_PITCH = math.radians(float(os.environ.get("FPV_PITCH_DEG", "28.0")))  # downtilt from horizon
-FPV_BACK = float(os.environ.get("FPV_BACK", "1.2"))   # metres behind the drone
-FPV_UP = float(os.environ.get("FPV_UP", "1.3"))       # metres above the drone (keeps drone out of frame)
+# FPV / onboard nose-cam: sit just AHEAD of + above the drone centre and look
+# FORWARD along the travel heading with a modest down-tilt. The drone stays
+# BEHIND the camera (out of frame), so you see where it's going -- horizon +
+# ground ahead. That's what separates it from the CHASE cam (drone framed from
+# behind). Paired with the wide (~115 deg) lens on topdown_cam.
+FPV_PITCH = math.radians(float(os.environ.get("FPV_PITCH_DEG", "15.0")))  # downtilt from horizon
+FPV_FWD = float(os.environ.get("FPV_FWD", "0.35"))    # metres AHEAD of the drone (onboard feel)
+FPV_UP = float(os.environ.get("FPV_UP", "0.15"))      # metres above the drone
 FPV_YAW0 = float(os.environ.get("FPV_YAW0", "0.0"))   # rad; heading to use while idle/hovering
+# Live view switch for the 2nd feed: a file whose contents ("topdown"/"fpv")
+# override CAM_MODE each tick, so the web UI can toggle this camera live.
+VIEW_FILE = os.environ.get("CAM_VIEW_FILE", "")
 UPDATE_HZ = float(os.environ.get("CHASE_HZ", "30"))
 VEL_MIN = float(os.environ.get("CHASE_VEL_MIN", "1.0"))    # m/s to trust travel heading
 # Heavier low-pass filtering to kill the high-frequency follow-cam jitter/vibration:
@@ -175,6 +178,18 @@ class ChaseCam:
                 else:
                     self.prev = (now, px, py)
 
+    def _effective_mode(self):
+        """CAM_MODE, unless a VIEW_FILE overrides it live (web toggle)."""
+        if VIEW_FILE:
+            try:
+                with open(VIEW_FILE) as f:
+                    v = f.read().strip()
+                if v in ("topdown", "fpv", "chase"):
+                    return v
+            except OSError:
+                pass
+        return MODE
+
     def tick(self):
         with self.lock:
             d = list(self.dpos) if self.dpos else None
@@ -182,7 +197,8 @@ class ChaseCam:
             cam = list(self.cam) if self.cam else None
         if d is None:
             return
-        if MODE == "topdown":
+        mode = self._effective_mode()
+        if mode == "topdown":
             # sit directly above the drone, looking straight down (nadir)
             tx, ty, tz = d[0], d[1], d[2] + TD_HEIGHT
             if cam is None:
@@ -192,10 +208,11 @@ class ChaseCam:
                 cam[1] += CAM_EASE * (ty - cam[1])
                 cam[2] += CAM_EASE * (tz - cam[2])
             qw, qx, qy, qz = rpy_to_quat(0.0, math.pi / 2, TD_YAW)  # +X -> straight down
-        elif MODE == "fpv":
-            # onboard-style angled view: look FORWARD along the (smoothed) travel
-            # heading, tilted down FPV_PITCH. Drone sits low in frame, horizon up
-            # top -> matches a nose-mounted FPV camera rather than a nadir view.
+        elif mode == "fpv":
+            # onboard nose-cam: sit just AHEAD of + above the drone and look
+            # FORWARD along the (smoothed) travel heading, tilted down FPV_PITCH.
+            # The drone stays BEHIND the camera -> out of frame -> a true
+            # "where it's going" view (distinct from the chase cam).
             if head is not None and math.hypot(*head) > 1e-3:
                 yaw = math.atan2(head[1], head[0])
             elif self.cyaw is not None:
@@ -209,8 +226,8 @@ class ChaseCam:
                 dyaw = (yaw - self.cyaw + math.pi) % (2 * math.pi) - math.pi
                 self.cyaw += ORI_SMOOTH * dyaw
             yaw = self.cyaw
-            tx = d[0] - FPV_BACK * math.cos(yaw)
-            ty = d[1] - FPV_BACK * math.sin(yaw)
+            tx = d[0] + FPV_FWD * math.cos(yaw)      # AHEAD of the drone
+            ty = d[1] + FPV_FWD * math.sin(yaw)
             tz = d[2] + FPV_UP
             if cam is None:
                 cam = [tx, ty, tz]

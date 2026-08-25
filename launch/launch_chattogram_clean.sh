@@ -41,12 +41,15 @@ setsid env PX4_GZ_WORLD=chattogram DISPLAY="${DISPLAY:-:0}" QT_QPA_PLATFORM=xcb 
 echo $! > "$HOME/sitl.pgid"
 
 # Cameras: two invisible followers repositioned in the world (both static).
-#  - chase (third-person, behind+above)        -> /chase_cam
-#  - fpv (onboard, forward + 45 deg down-tilt)  -> /topdown_cam (reuses the slot)
+#  - chase (third-person, behind+above)  -> /chase_cam
+#  - 2nd feed: TOP-DOWN by default, live-switchable to FPV from the web UI via
+#    $HOME/.cam2_view (written by /api/command cam_view)  -> /topdown_cam
 pkill -f "chase_cam.py" 2>/dev/null
+echo topdown > "$HOME/.cam2_view"
 setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_MODE=chase \
   python3 "$GCS/chase_cam.py" > "$HOME/chase_cam.log" 2>&1 &
-setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_MODE=fpv \
+setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_MODE=topdown \
+  CAM_VIEW_FILE="$HOME/.cam2_view" \
   python3 "$GCS/chase_cam.py" > "$HOME/topdown_cam.log" 2>&1 &
 
 # Gazebo cameras -> web MJPEG bridges (replace the old x11grab screen-scrape).

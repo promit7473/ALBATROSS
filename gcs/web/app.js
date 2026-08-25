@@ -416,7 +416,26 @@ function makeCamToggle(btnId, imgId, url, onStart) {
 }
 makeCamToggle('btn-feed', 'feed-img', '/video.mjpeg',
   () => fetch('/api/gazebo/follow', { method: 'POST' }));   // chase cam tracks the drone
-makeCamToggle('btn-feed2', 'feed2-img', '/video2.mjpeg');   // fpv (forward, angled down)
+makeCamToggle('btn-feed2', 'feed2-img', '/video2.mjpeg');   // top-down / fpv (toggled)
+
+// 2nd feed view toggle: Top-Down <-> FPV. Re-aims the same camera live (no
+// restart, feed stays on :8092) via /api/command cam_view.
+(function initCam2View() {
+  let view = 'topdown';
+  const btn = $('btn-feed2-view'), title = $('cam2-title');
+  if (!btn) return;
+  const apply = () => {
+    title.textContent = view === 'topdown' ? 'TOP-DOWN CAM' : 'FPV CAM';
+    btn.textContent = view === 'topdown' ? '🎥 FPV' : '⬇ Top-Down';
+  };
+  btn.onclick = () => {
+    view = view === 'topdown' ? 'fpv' : 'topdown';
+    apply();
+    cmdPost({ cmd: 'cam_view', view });
+  };
+  apply();
+})();
+
 // ?feeds=on -> auto-start both camera feeds (handy for demos/screenshots)
 if (new URLSearchParams(location.search).get('feeds') === 'on') {
   ['btn-feed', 'btn-feed2'].forEach(id => { const b = $(id); if (b && !b.classList.contains('active')) b.click(); });

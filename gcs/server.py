@@ -29,6 +29,7 @@ from fc_iface import MavlinkRestFC  # noqa: E402
 KML = os.path.join(ROOT, "assets/chattogram_zones.kml")
 BASE = {"name": "Base / Port Gate", "lat": 22.318725, "lon": 91.813156}
 OP_FILE = os.path.join(HERE, "operating_area.json")   # user-drawn boundary persistence
+CAM2_VIEW_FILE = os.path.join(os.path.expanduser("~"), ".cam2_view")  # 2nd feed: topdown|fpv
 FC = MavlinkRestFC()
 
 # --- CAAB (Bangladesh Civil Aviation Authority) UAS rule enforced in the sim ---
@@ -336,6 +337,12 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": False, "reason": "path_blocked",
                         "error": "Direct path crosses a no-fly zone. Use Plan route (it detours)."})
                 FC.reposition(lat, lon, alt)
+            elif cmd == "cam_view":
+                view = body.get("view", "topdown")
+                if view not in ("topdown", "fpv"):
+                    return self._send(400, {"error": "view must be topdown|fpv"})
+                with open(CAM2_VIEW_FILE, "w") as f:
+                    f.write(view)   # chase_cam.py polls this to re-aim the 2nd cam live
             elif cmd == "set_speed":
                 speed = max(0.5, min(30.0, float(body.get("speed", 5.0))))
                 FC.set_speed(speed)
