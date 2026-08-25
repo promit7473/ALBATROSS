@@ -145,7 +145,6 @@ body.theme-light .ctl-btn.go { background: #dcfce7; color: #166534; border-color
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .sw.op { background: transparent; border: 2px solid #34d399; }
 .sw.ex { background: rgba(239,68,68,.35); border: 1px solid #ef4444; }
-.sw.caab { background: rgba(245,158,11,.15); border: 2px dashed #f59e0b; border-radius: 50%; }
 .sw.base { background: #38bdf8; border-radius: 50%; }
 .sw.drone { background: #facc15; border-radius: 50%; }
 .caab-info { margin-top: 7px; padding-top: 6px; border-top: 1px solid rgba(148,163,184,.25);

@@ -1,8 +1,8 @@
 /* Maritime GCS — live map, draw/edit boundary, plan+upload mission, 2D+3D */
 const $ = id => document.getElementById(id);
 let BASE = { lat: 22.318725, lon: 91.813156 };
-// CAAB rules (filled from /api/caab): altitude ceiling + airport no-fly radius.
-let CAAB = { max_alt_ft: 200, max_alt_m: 60.96, airport_radius_m: 18500, airports: [] };
+// CAAB rule we enforce (filled from /api/caab): the altitude ceiling.
+let CAAB = { max_alt_ft: 200, max_alt_m: 60.96 };
 
 // ================= LIVE DRONE STATE (updated every tick) =================
 let currentDroneLL = null;   // [lat, lon] from telemetry
@@ -76,35 +76,18 @@ fetch('/api/kml').then(r => r.json()).then(g => {
   });
 });
 
-// -------- CAAB compliance overlay (altitude ceiling + airport no-fly circles) --------
+// -------- CAAB altitude ceiling (200 ft AGL) --------
+// No-fly zones come from the KML exclusion layer; the CAAB rule we enforce here
+// is only the altitude cap (the 18.5 km airport radius blankets all of Chattogram
+// so it isn't drawn on the map).
 fetch('/api/caab').then(r => r.json()).then(c => {
   CAAB = c;
   const capM = Math.floor(c.max_alt_m);   // whole-metre ceiling for the UI inputs
   ['alt', 'alt-slider', 'rtl-alt'].forEach(id => {
     const el = $(id); if (el) { el.max = capM; if (+el.value > capM) el.value = capM; }
   });
-  // draw each airport no-fly circle on the 2D map (amber, dashed)
-  const caabCircles = [];
-  (c.airports || []).forEach(ap => {
-    const circ = L.circle([ap.lat, ap.lon], { radius: c.airport_radius_m, color:'#f59e0b', weight:2,
-      dashArray:'8 6', fill:true, fillColor:'#f59e0b', fillOpacity:0.06 })
-      .addTo(map).bindTooltip(`CAAB no-fly · ${ap.name} (${(c.airport_radius_m/1000).toFixed(1)} km)`, { sticky:true });
-    L.circleMarker([ap.lat, ap.lon], { radius:5, color:'#f59e0b', fillColor:'#fbbf24', fillOpacity:1, weight:2 })
-      .addTo(map).bindTooltip(ap.name);
-    caabCircles.push(circ);
-  });
-  // ?view=caab -> frame the whole no-fly extent (compliance overview shot)
-  if (new URLSearchParams(location.search).get('view') === 'caab' && caabCircles.length) {
-    setTimeout(() => { try { map.fitBounds(L.featureGroup(caabCircles).getBounds().pad(0.08)); } catch(e){} }, 350);
-  }
-  // compliance banner
   const el = $('caab-info');
-  if (el) {
-    let msg = `≤ ${c.max_alt_ft} ft (${capM} m) AGL · no-fly within ${(c.airport_radius_m/1000).toFixed(1)} km of airports`;
-    if (c.base_in_airport_nofly)
-      msg += ` · ⚠️ base ${(c.base_in_airport_nofly.dist_m/1000).toFixed(1)} km from ${c.base_in_airport_nofly.name} — authorization required`;
-    el.innerHTML = msg;
-  }
+  if (el) el.innerHTML = `CAAB max altitude: ≤ ${c.max_alt_ft} ft (${capM} m) AGL`;
 });
 
 map.pm.setGlobalOptions({ snappable: true, allowSelfIntersection: false });
@@ -359,16 +342,6 @@ function init3D() {
       const ring = f.geometry.coordinates[0].flatMap(c => [c[0], c[1]]);
       viewer.entities.add({ polygon: { hierarchy: Cesium.Cartesian3.fromDegreesArray(ring), material: Cesium.Color.RED.withAlpha(0.3) } });
     }
-  }));
-  // CAAB airport no-fly circle(s) on the globe
-  fetch('/api/caab').then(r=>r.json()).then(c => (c.airports || []).forEach(ap => {
-    viewer.entities.add({ position: Cesium.Cartesian3.fromDegrees(ap.lon, ap.lat),
-      ellipse: { semiMajorAxis: c.airport_radius_m, semiMinorAxis: c.airport_radius_m,
-        material: Cesium.Color.fromCssColorString('#f59e0b').withAlpha(0.10),
-        outline: true, outlineColor: Cesium.Color.fromCssColorString('#f59e0b'), height: 0 },
-      label: { text: `CAAB no-fly (${(c.airport_radius_m/1000).toFixed(1)} km)`, font: '11px sans-serif',
-        fillColor: Cesium.Color.fromCssColorString('#fbbf24'), showBackground: true,
-        backgroundColor: Cesium.Color.BLACK.withAlpha(0.5) } });
   }));
   cesDrone = viewer.entities.add({
     position: new Cesium.CallbackProperty(() => cesDronePos, false),

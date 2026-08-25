@@ -31,14 +31,12 @@ BASE = {"name": "Base / Port Gate", "lat": 22.318725, "lon": 91.813156}
 OP_FILE = os.path.join(HERE, "operating_area.json")   # user-drawn boundary persistence
 FC = MavlinkRestFC()
 
-# --- CAAB (Bangladesh Civil Aviation Authority) UAS rules, plugged into the sim ---
-# The two numbers from the CAAB drone guidance: max height 200 ft AGL, and no-fly
-# within 10 mi / 18.5 km of an airport. Overridable via env for other locales.
+# --- CAAB (Bangladesh Civil Aviation Authority) UAS rule enforced in the sim ---
+# CAC-5 (RPAS, 2019) sec 4(g): max height 200 ft AGL. The 10-NM airport no-fly
+# (sec 4h) is not drawn -- it blankets all of Chattogram; the KML exclusion zones
+# are the operational no-fly layer instead. Overridable via env.
 CAAB_MAX_ALT_FT = float(os.environ.get("CAAB_MAX_ALT_FT", "200"))
 CAAB_MAX_ALT_M = round(CAAB_MAX_ALT_FT * 0.3048, 2)             # 200 ft -> 60.96 m
-CAAB_AIRPORT_RADIUS_M = float(os.environ.get("CAAB_AIRPORT_RADIUS_M", "18500"))  # 10 mi / 18.5 km
-# Nearest airport to the Chattogram operating area: Shah Amanat Intl (VGEG).
-CAAB_AIRPORTS = [{"name": "Shah Amanat Intl (VGEG)", "lat": 22.24964, "lon": 91.81306}]
 
 
 def caab_clamp_alt(a):
@@ -48,18 +46,6 @@ def caab_clamp_alt(a):
     except (TypeError, ValueError):
         return CAAB_MAX_ALT_M
     return min(a, CAAB_MAX_ALT_M)
-
-
-def caab_airport_hit(lat, lon):
-    """Nearest airport whose no-fly radius contains (lat,lon), else None."""
-    best = None
-    for ap in CAAB_AIRPORTS:
-        d = geo.haversine_m(lat, lon, ap["lat"], ap["lon"])
-        if d <= CAAB_AIRPORT_RADIUS_M and (best is None or d < best[1]):
-            best = (ap, d)
-    if best:
-        return {"name": best[0]["name"], "dist_m": round(best[1], 1)}
-    return None
 
 
 def load_op_area():
@@ -242,10 +228,7 @@ class H(BaseHTTPRequestHandler):
         elif p == "/api/kml":
             self._send(200, GEOJSON)
         elif p == "/api/caab":
-            self._send(200, {
-                "max_alt_ft": CAAB_MAX_ALT_FT, "max_alt_m": CAAB_MAX_ALT_M,
-                "airport_radius_m": CAAB_AIRPORT_RADIUS_M, "airports": CAAB_AIRPORTS,
-                "base_in_airport_nofly": caab_airport_hit(BASE["lat"], BASE["lon"])})
+            self._send(200, {"max_alt_ft": CAAB_MAX_ALT_FT, "max_alt_m": CAAB_MAX_ALT_M})
         elif p == "/api/operating_area":
             self._send(200, load_op_area())
         elif p == "/api/telemetry":
