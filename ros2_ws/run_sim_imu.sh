@@ -24,8 +24,12 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 echo "[1/5] Starting MAVROS..."
+# MAVROS holds the USB serial port EXCLUSIVELY, so QGC cannot also open it over
+# USB. Instead MAVROS forwards MAVLink to a GCS over UDP (gcs_url) on :14550,
+# and QGC connects to that (its default AutoConnect UDP link listens on 14550).
 setsid ros2 run mavros mavros_node --ros-args \
   -p fcu_url:="$FCU_URL" \
+  -p gcs_url:="udp://@localhost:14550" \
   -p plugin_blacklist:="[sys, companion_process_status]" &>/tmp/mavros.log &
 sleep 12
 
@@ -52,7 +56,7 @@ setsid rviz2 -d "$RVIZ_CFG" &>/tmp/rviz.log &
 echo "[5/5] Starting QGroundControl (Mission Planner)..."
 if [ -x "$QGC" ]; then
     setsid "$QGC" &>/tmp/qgc.log &
-    echo "  QGroundControl launched (connects to Pixhawk via USB)"
+    echo "  QGroundControl launched (connects via MAVROS UDP bridge :14550, not USB)"
 else
     echo "  QGC not found at $QGC - skipping"
 fi

@@ -49,7 +49,7 @@ and a multi-waypoint mission editor.
 
   \draw[->] (ui)  -- node[lab]{HTTP :8080} (gcs);
   \draw[->] (gcs) -- node[lab]{REST :8088} (m2r);
-  \draw[->] (m2r) -- node[lab]{\shortstack{MAVLink\\UDP :14550}} (px4);
+  \draw[->] (m2r) -- node[lab]{\shortstack{MAVLink\\UDP :14555}} (px4);
   \draw[<->](px4) -- node[lab]{sim} (gz);
   \draw[->] (gz)  -- node[lab, right]{\shortstack{gz-\\transport}} (cam);
   \draw[->] (kml) -- (gcs);
@@ -66,7 +66,8 @@ and a multi-waypoint mission editor.
         nodes (\texttt{patrol/plan/descend/drop}). MAVROS pushes/arms via the MAVLink
         mission protocol.
   \item \textbf{mavlink2rest} --- exposes MAVLink as REST on \texttt{:8088}
-        (\texttt{udpin:14550}); telemetry + command bridge for the web GCS.
+        (\texttt{udpin:14555}); telemetry + command bridge for the web GCS.
+        QGroundControl attaches separately on \texttt{:14550} (zero-config).
   \item \textbf{maritime\_gcs / server.py} (\texttt{:8080}) --- serves the UI, proxies
         telemetry, runs the planner, uploads missions, and enforces no-fly zones.
   \item \textbf{chase\_cam.py} --- spawns a static Gazebo camera that follows the drone
@@ -82,12 +83,14 @@ and a multi-waypoint mission editor.
 \texttt{8080} & GCS web UI + API + \texttt{/video.mjpeg} proxy \\
 \texttt{8091} & chase-cam MJPEG bridge \\
 \texttt{8088} & mavlink2rest REST API \\
-\texttt{14550}& PX4 $\rightarrow$ mavlink2rest (MAVLink UDP) \\
+\texttt{14555}& PX4 $\rightarrow$ mavlink2rest (MAVLink UDP) \\
+\texttt{14550}& PX4 $\rightarrow$ QGroundControl (MAVLink UDP) \\
 \bottomrule
 \end{tabular}
 \end{center}
 Data path: \texttt{browser $\to$ :8080 server.py $\to$ fc\_iface $\to$ :8088 mavlink2rest
-$\to$ :14550 MAVLink $\to$ PX4 SITL $\leftrightarrow$ Gazebo}. The camera feed flows
+$\to$ :14555 MAVLink $\to$ PX4 SITL $\leftrightarrow$ Gazebo}. QGroundControl attaches
+independently on \texttt{:14550} (PX4's default GCS link). The camera feed flows
 \texttt{Gazebo $\to$ gz-transport $\to$ cam\_bridge (:8091) $\to$ :8080 proxy $\to$ browser}.
 
 \subsection{Directory layout (consolidated)}

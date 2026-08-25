@@ -4,6 +4,7 @@ Everything else in the GCS talks ONLY to this interface. Today: MAVLink via
 mavlink2rest. Later: add a `DDSOffboardFC` with the same methods for the Jetson.
 """
 import json
+import math
 import os
 import subprocess
 import time
@@ -28,7 +29,7 @@ def ensure_mavlink2rest():
     m2r = "/home/mhpromit7473/mavlink2rest"
     if os.path.exists(m2r):
         try:
-            subprocess.Popen([m2r, "-c", "udpin:0.0.0.0:14550", "-s", "0.0.0.0:8088", "--send-initial-heartbeats"],
+            subprocess.Popen([m2r, "-c", "udpin:0.0.0.0:14555", "-s", "0.0.0.0:8088", "--send-initial-heartbeats"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             print("[fc_iface] started background mavlink2rest on :8088")
         except Exception as e:
@@ -75,7 +76,13 @@ class MavlinkRestFC(FCInterface):
         hud = _get(f"{_VEH}/VFR_HUD")
         gps = _get(f"{_VEH}/GPS_RAW_INT")
         sysst = _get(f"{_VEH}/SYS_STATUS")
+        att = _get(f"{_VEH}/ATTITUDE")
         t = {"connected": gp is not None or hb is not None}
+        if att:
+            m = att["message"]
+            t.update(roll=math.degrees(m.get("roll", 0.0)),
+                     pitch=math.degrees(m.get("pitch", 0.0)),
+                     yaw=math.degrees(m.get("yaw", 0.0)))
         if gp:
             m = gp["message"]
             t.update(lat=m["lat"] / 1e7, lon=m["lon"] / 1e7,
@@ -136,9 +143,20 @@ class MavlinkRestFC(FCInterface):
         self.arm(True)
         return True
 
+    def continue_mission(self):
+        """Resume the uploaded mission from the CURRENT item (unlike start_mission,
+        this does not reset to seq 0) -- used by the 'Proceed' button after Alt-Hold."""
+        self.set_mode(MAIN_AUTO, SUB_MISSION)
+        return True
+
     def reposition(self, lat, lon, alt):
         # MAV_CMD_DO_REPOSITION = 192 (flies directly to coordinates in guided mode)
         self._cmd("MAV_CMD_DO_REPOSITION", (-1, 1, 0, float('nan'), lat, lon, alt))
+        return True
+
+    def set_speed(self, speed, kind=1):
+        # MAV_CMD_DO_CHANGE_SPEED = 178; p1=type (1=ground speed), p2=speed m/s, p3=throttle(-1)
+        self._cmd("MAV_CMD_DO_CHANGE_SPEED", (kind, float(speed), -1, 0, 0, 0, 0))
         return True
 
     def set_servo(self, channel=1, pwm=2000):
@@ -147,7 +165,7 @@ class MavlinkRestFC(FCInterface):
         return True
 
     def set_param(self, name, value, ptype="MAV_PARAM_TYPE_REAL32"):
-        """Set a PX4 parameter (e.g. RTL_RETURN_ALT) via mavlink2rest PARAM_SET.
+        """Set a PX4 parameter via mavlink2rest PARAM_SET.
         mavlink2rest serialises the char[16] param_id as a plain string."""
         _post({"type": "PARAM_SET", "param_id": name, "param_value": float(value),
                "param_type": {"type": ptype},

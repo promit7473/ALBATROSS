@@ -23,9 +23,11 @@ rm -f "$FIFO"; mkfifo "$FIFO"
 setsid bash -c "exec tail -f /dev/null > '$FIFO'" &
 echo $! > "$HOME/.px4_fifo_holder.pid"
 
-# ensure mavlink2rest is running for the GCS
+# ensure mavlink2rest is running for the web GCS. It listens on a DEDICATED
+# :14555 (fed by a pushed PX4 mavlink instance below) so QGroundControl can own
+# PX4's default GCS port :14550 with zero configuration. REST stays on :8088.
 pkill -f "mavlink2rest" 2>/dev/null
-"$M2R" -c udpin:0.0.0.0:14550 -s 0.0.0.0:8088 --send-initial-heartbeats > /dev/null 2>&1 &
+"$M2R" -c udpin:0.0.0.0:14555 -s 0.0.0.0:8088 --send-initial-heartbeats > /dev/null 2>&1 &
 
 : > "$LOG"
 cd "$PX4_DIR"
@@ -38,16 +40,22 @@ setsid env PX4_GZ_WORLD=chattogram DISPLAY="${DISPLAY:-:0}" QT_QPA_PLATFORM=xcb 
   bash -c "exec make px4_sitl gz_x500 < '$FIFO' >> '$LOG' 2>&1" &
 echo $! > "$HOME/sitl.pgid"
 
-# Chase (third-person follow) camera: spawns an invisible camera model and
-# repositions it behind+above the drone every tick -> publishes /chase_cam.
+# Cameras: two invisible followers repositioned in the world (both static).
+#  - chase (third-person, behind+above)        -> /chase_cam
+#  - fpv (onboard, forward + 45 deg down-tilt)  -> /topdown_cam (reuses the slot)
 pkill -f "chase_cam.py" 2>/dev/null
-setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python \
+setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_MODE=chase \
   python3 "$GCS/chase_cam.py" > "$HOME/chase_cam.log" 2>&1 &
+setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_MODE=fpv \
+  python3 "$GCS/chase_cam.py" > "$HOME/topdown_cam.log" 2>&1 &
 
-# Gazebo camera -> web MJPEG bridge (replaces the old x11grab screen-scrape).
+# Gazebo cameras -> web MJPEG bridges (replace the old x11grab screen-scrape).
+#  chase feed on :8091 (/video.mjpeg), top-down feed on :8092 (/video2.mjpeg)
 pkill -f "cam_bridge.py" 2>/dev/null
-setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_TOPIC=/chase_cam \
+setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_TOPIC=/chase_cam CAM_BRIDGE_PORT=8091 \
   python3 "$GCS/cam_bridge.py" > "$HOME/cam_bridge.log" 2>&1 &
+setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_TOPIC=/topdown_cam CAM_BRIDGE_PORT=8092 \
+  python3 "$GCS/cam_bridge.py" > "$HOME/cam_bridge2.log" 2>&1 &
 
 # Auto-configure PX4 once it's up: arming bypass (SITL) + nose toward travel
 # (MIS_YAWMODE=1 mission, MPC_YAW_MODE=0 guided) + SMOOTH takeoff/landing tuning
@@ -59,10 +67,18 @@ setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_TOPIC=/chase_cam \
            "MPC_TKO_RAMP_TIME 3.0" "MPC_TKO_SPEED 1.0" "MPC_LAND_SPEED 0.4" \
            "MPC_LAND_ALT1 15.0" "MPC_LAND_ALT2 5.0" "MPC_Z_VEL_MAX_DN 1.0" \
            "MPC_JERK_AUTO 3.0" "MPC_ACC_UP_MAX 2.5" "MPC_ACC_DOWN_MAX 2.0" \
-           "MPC_ACC_HOR 2.0"; do
+           "MPC_ACC_HOR 2.0" "RTL_RETURN_ALT 60.0" "RTL_DESCEND_ALT 30.0"; do
     echo "param set $p" > "$FIFO"; sleep 0.4
   done
   echo "param save" > "$FIFO"
+
+  # Dedicated web-GCS link. PX4's default GCS link already targets :14550, which
+  # we leave for QGroundControl (zero-config AutoConnect). Here we start a SECOND
+  # full-GCS mavlink instance that pushes to 127.0.0.1:14555, where mavlink2rest
+  # listens. -x enables FTP (param/mission download). The two GCSs are fully
+  # independent: QGC on :14550, web GCS on :14555.
+  sleep 1
+  echo "mavlink start -x -u 14556 -o 14555 -r 4000000 -f" > "$FIFO"
 ) &
 
 # Auto-lock Gazebo GUI 3D camera onto the drone (for anyone watching the GUI)
