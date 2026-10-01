@@ -1,5 +1,32 @@
 # QGroundControl Setup
 
+## Current HM30 hardware connection
+
+For `launch/start_real.sh`, one `gcs/mav_hub.py` process owns the aircraft link
+and forwards the same MAVLink traffic to QGC on `127.0.0.1:14550` and the web
+bridge on `127.0.0.1:14555`. Replies from both applications return through that
+relay. QGC's UDP AutoConnect should be enabled. Do not also open the same serial
+device in QGC when the relay owns it.
+
+The HM30 network video connection and flight-controller telemetry are separate.
+Receiving camera video does not prove MAVLink is arriving. The HM30 datalink
+output mode, flight-controller UART wiring, baud rate, and MAVLink configuration
+must match the selected telemetry transport. For the default Ethernet relay,
+the expected endpoint is `192.168.144.12:19856` using UDP.
+
+Live position and flight mode update in both applications from the aircraft.
+Draft mission editors do not automatically mirror each other. After a successful
+web mission upload, use QGC's **Download from Vehicle** to retrieve the stored
+mission. The web GCS no longer restarts QGC for mission synchronization in real
+mode. Upload/flight verification is still required; sharing telemetry is not a
+flight-readiness check.
+
+The browser's **Aircraft 3D** is a Cesium view of MAVLink position and attitude.
+Gazebo is the separate SITL simulator. Missing telemetry/GPS hides the browser's
+aircraft model rather than placing it at the map center.
+
+The following sections describe the simulator and alternate MAVROS USB setup.
+
 QGC runs **alongside** the web GCS, not instead of it, and needs **zero manual
 configuration**. The trick: PX4's default GCS link already sends telemetry to
 `127.0.0.1:14550`, which is exactly where QGC's factory AutoConnect listens. So

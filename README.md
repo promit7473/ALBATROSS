@@ -44,6 +44,9 @@ launch guide: [`docs/LAUNCH_GUIDE.pdf`](docs/LAUNCH_GUIDE.pdf).
   its **own altitude**; adjustable auto-RTL return altitude.
 - **Live web GCS** — 2D map (Leaflet) + 3D view (Cesium), telemetry HUD, arm /
   start / RTL / reposition / cargo-drop, all over MAVLink.
+- **Manual ⇄ Auto toggle** — one button hands control to the RC pilot (POSCTL) or
+  resumes the uploaded mission (AUTO.MISSION). On a real Pixhawk the RC always
+  keeps override priority; the toggle just commands the PX4 flight mode.
 - **Chase-camera feed** — a real Gazebo camera that follows the drone (look-at,
   travel-facing), streamed as MJPEG. Works headless / under Wayland (no screen
   scraping).
@@ -54,9 +57,9 @@ launch guide: [`docs/LAUNCH_GUIDE.pdf`](docs/LAUNCH_GUIDE.pdf).
 
 ```
 maritime_project/
-├── gcs/         web GCS: server.py, fc_iface.py, chase_cam.py, cam_bridge.py, web/
+├── gcs/         web GCS: server.py, fc_iface.py, rc_to_sitl.py, chase_cam.py, cam_bridge.py, web/
 ├── ros2_ws/     ROS 2 workspace — pkg maritime_autonomy (planner, geo, mission nodes, world)
-├── launch/      launch_chattogram_clean.sh, start_all.sh, restart_gcs.sh
+├── launch/      start.sh (3-stage selector), start_all.sh, start_sitl_manual.sh, start_real.sh
 ├── assets/      chattogram_zones.kml (operating area + exclusion zones)
 ├── docs/        SYSTEM_OVERVIEW + LAUNCH_GUIDE (.tex/.pdf)
 ├── media/       demo.mp4 / demo.gif
@@ -83,20 +86,76 @@ ln -s /path/to/PX4-Autopilot external/PX4-Autopilot
 ln -s /path/to/mavlink2rest  external/mavlink2rest
 ```
 
-## Quick start
+## Three stages
+
+The system runs in three stages, all launched through one selector:
 
 ```bash
-# brings up: web server (:8080) + PX4 SITL + Gazebo + chase cam + mavlink2rest
-bash launch/start_all.sh
+bash launch/start.sh 1     # Stage 1: planning sim (autonomous, no RC)
+bash launch/start.sh 2     # Stage 2: sim + manual RC control (fly the sim)
+bash launch/start.sh 3     # Stage 3: real Pixhawk (no sim)
+# also: planning | manual | real
 ```
 
-Then open **http://localhost:8080**. Give the sim ~15 s to warm up, then click
-**Gazebo feed**. Mission flow in the UI:
+### Stage 1 — Planning simulation (no Pixhawk, no RC)
 
-> **➕ Add waypoints** (click the map, set per-waypoint heights) → **Plan route**
-> (routes around no-fly zones) → **Upload mission** → **Arm** → **Start**.
+The "earlier version": PX4 SITL + Gazebo + web GCS. `COM_RC_IN_MODE=4` (manual
+control disabled). Pure autonomous mission planning.
 
-Restart just the web layer after code changes (leaves the sim running):
+```bash
+bash launch/start.sh 1      # = launch/start_all.sh
+```
+
+Open **http://localhost:8080**, give the sim ~15 s, click **Gazebo feed**.
+
+> **➕ Add waypoints** → **Plan route** (routes around no-fly zones) →
+> **Upload mission** → **Arm** → **Start**.
+
+### Stage 2 — Manual control in the sim (RC receiver wireless)
+
+Same Gazebo sim, but the pilot flies the *simulated* drone with the real RC
+transmitter. `COM_RC_IN_MODE=1` (MAVLink manual control enabled) +
+`rc_to_sitl.py` bridges RC from the real Pixhawk to SITL:
+
+```
+RC transmitter --wireless--> receiver (on Pixhawk) --USB/MAVLink--> rc_to_sitl.py
+      --HTTP/MANUAL_CONTROL--> mavlink2rest --MAVLink--> PX4 SITL (Gazebo)
+```
+
+```bash
+bash launch/start.sh 2      # = launch/start_sitl_manual.sh
+```
+
+The receiver stays wired to the Pixhawk (CRSF on its RC port); the Pixhawk is
+connected to the laptop over USB (`/dev/ttyACM0`, USB power only — it need not
+be armed). The bridge reads `RC_CHANNELS` and forwards `MANUAL_CONTROL` to
+SITL via mavlink2rest. QGC connects to the *SITL* on :14550, not the Pixhawk.
+
+In the web UI: toggle to **Manual** (POSCTL) to fly with sticks, or **Auto**
+to resume an uploaded mission. Arm via the web GCS **Arm** button, then fly.
+Watch `~/rc_bridge.log` for `RC link LIVE` (or the all-zeros warning if the
+receiver is unbound/unpowered).
+
+### Stage 3 — Real Pixhawk (no sim)
+
+The drone is the real Pixhawk 6C in the sky. RC → receiver → Pixhawk is
+handled natively by PX4 firmware (do **not** use `rc_to_sitl.py` here). The
+web GCS talks MAVLink over the SIYI HM30 radio (UDP `192.168.144.12:19856`)
+or a USB cable if the Pixhawk is plugged in, and offers the Manual ⇄ Auto
+toggle. QGC pops up on `:14550`. FPV from the HM30 camera is proxied into
+the web UI (`rtsp://192.168.144.25:8554/main.264`).
+
+```bash
+bash launch/start.sh 3      # = launch/start_real.sh
+# laptop Ethernet on the SIYI LAN (192.168.144.30); QGC + FPV + web GCS
+```
+
+Starts the web GCS (:8080) + `mavlink2rest` + `mav_hub.py` (SIYI UDP or
+Pixhawk USB → `:14550` / `:14555`) + `rtsp_bridge.py` (FPV MJPEG on `:8091`)
++ QGroundControl. No Gazebo, no SITL-only bypass params — set RC/datalink
+failsafe (`NAV_RCL_ACT`, `NAV_DLL_ACT`, `COM_RCL_EXCEPT`) in QGC.
+
+Restart just the web layer after code changes (leaves the sim/Pixhawk running):
 
 ```bash
 bash launch/restart_gcs.sh
@@ -107,21 +166,24 @@ bash launch/restart_gcs.sh
 | Port  | Service |
 |-------|---------|
 | 8080  | GCS web UI + API + `/video.mjpeg` proxy |
-| 8091  | chase-cam MJPEG bridge |
+| 8091  | chase-cam / FPV MJPEG bridge |
 | 8088  | mavlink2rest REST API |
-| 14550 | PX4 → mavlink2rest (MAVLink UDP) |
+| 14550 | PX4 → QGroundControl (MAVLink UDP) |
+| 14555 | PX4 → mavlink2rest (web GCS MAVLink UDP) |
 
 ## Notes
 
 - The session here is **Wayland**, so the feed is a rendered Gazebo camera, not a
   desktop screen grab (which returns black under XWayland).
 - `launch_chattogram_clean.sh` auto-applies **SITL-only** arming bypass params
-  (`COM_RC_IN_MODE`, `CBRK_SUPPLY_CHK`, …) — do **not** use these on real hardware.
+  (`CBRK_SUPPLY_CHK`, `NAV_RCL_ACT`, …) — do **not** use these on real hardware.
+  `COM_RC_IN_MODE` is set by `SITL_RC_IN_MODE` env (4 = planning, 1 = manual);
+  Stage 3 (`start_real.sh`) applies none of these.
 - The ROS 2 `build/`/`install/` dirs are not committed; run `colcon build` in
   `ros2_ws/` before using the MAVROS mission nodes.
 
 ## Roadmap
 
 - Migrate onboard control from MAVROS to **uXRCE-DDS** (offboard) for the Jetson
-- Downward-facing (nadir) camera feed
+- Downward-facing (nadir) camera feed on the real-hardware path (FPV RTSP is live)
 - Rangefinder-based AGL fusion for over-water flight

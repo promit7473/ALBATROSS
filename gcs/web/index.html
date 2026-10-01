@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Widgets/widgets.css" />
-  <link rel="stylesheet" href="/style.css?v=4" />
+  <link rel="stylesheet" href="/style.css?v=9" />
 </head>
 <body>
   <div id="dash">
@@ -137,21 +137,37 @@
       <div id="map-cell">
         <div id="map"></div>
         <div id="cesiumContainer"></div>
+        <div id="position-status" role="status">Waiting for aircraft telemetry</div>
         <button id="btn-3d" class="map-btn">🌐 Toggle 3D</button>
+        <button id="btn-locate" class="map-btn map-btn-locate" title="Center map on the aircraft">⌖ Locate</button>
         <div id="ces-tools">
           <button id="btn-3d-follow" class="winbtn">🎥 Follow</button>
+          <button id="btn-gps-view" class="winbtn">📡 GPS view</button>
           <button id="btn-2d" class="winbtn">✕ 2D</button>
+        </div>
+        <div id="gps-hud">
+          <div class="gps-hud-title">GNSS LINK</div>
+          <div id="gps-hud-stats">waiting…</div>
+          <canvas id="gps-skyplot" width="168" height="168"></canvas>
+          <div class="gps-hud-legend"><span class="g-lock"></span> locked
+            <span class="g-view"></span> in view
+            <span class="g-out"></span> below horizon</div>
         </div>
       </div>
 
       <div id="cam-row">
-        <div class="cam-cell">
+        <div class="cam-cell" id="cam-fpv">
           <div class="cam-bar"><span id="cam2-title">TOP-DOWN CAM</span>
-            <button id="btn-feed2-view" class="cam-toggle">🎥 FPV</button>
+            <button id="btn-camera-size" class="cam-toggle" title="Enlarge or restore the camera panel">Enlarge</button>
+            <button id="btn-camera-fullscreen" class="cam-toggle" title="Show camera fullscreen">⛶</button>
+            <button id="btn-camera-reset" class="cam-toggle" title="Reset camera size">Reset</button>
+            <button id="btn-feed2-view" class="cam-toggle sitl-only">🎥 FPV</button>
             <button id="btn-feed2" class="cam-toggle">▶ start</button></div>
-          <div class="cam-body"><img id="feed2-img" alt="Top-down / FPV camera — starts once SITL is running" /></div>
+          <div class="cam-body"><img id="feed2-img" alt="Top-down / FPV camera" />
+            <div id="fpv-status" class="camera-status" role="status" hidden></div>
+          </div>
         </div>
-        <div class="cam-cell">
+        <div class="cam-cell sitl-only" id="cam-chase">
           <div class="cam-bar"><span>CHASE CAM</span>
             <button id="btn-feed" class="cam-toggle">▶ start</button></div>
           <div class="cam-body"><img id="feed-img" alt="Chase camera — starts once SITL is running" /></div>
@@ -172,7 +188,12 @@
 
       <section id="mission" class="panel">
         <div class="panel-title">MISSION CONTROL</div>
-        <div class="mrow" style="margin-bottom: 8px;">
+        <div id="mode-switch">
+          <button id="btn-mode-plan" title="Gazebo planning sim — autonomous, no RC">① Plan</button>
+          <button id="btn-mode-manual" title="Fly the simulator with the real RC. Real motors stay disarmed.">② Manual sim</button>
+          <button id="btn-mode-twin" class="active" title="Digital twin: live GPS + FPV + 3D at the real aircraft. Props stay off.">③ Digital twin</button>
+        </div>
+        <div class="mrow sitl-only" style="margin-bottom: 8px;">
           <button id="btn-sitl-start" class="go" style="background:#059669;border-color:#10b981;">🚀 Launch SITL</button>
           <button id="btn-sitl-stop" class="warn">⏹ Stop SITL</button>
         </div>
@@ -192,6 +213,7 @@
           <button id="btn-fly" class="go">▶ Start</button>
           <button id="btn-rtl" class="warn">⟲ RTL</button>
         </div>
+        <button id="btn-toggle-mode" class="ctl-btn btn-toggle" title="Hand control to the RC pilot (Manual) or resume the uploaded mission (Auto).">✋ Manual</button>
         <button id="btn-stop-mission" class="warn" style="background:#7f1d1d;border-color:#ef4444;color:#fecaca;">⏹ Stop / Clear mission</button>
         <div class="mrow" style="margin-top: 6px;">
           <button id="btn-goto" class="primary" style="background:#0284c7;border-color:#38bdf8;">📍 Fly to last WP</button>
@@ -207,6 +229,6 @@
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
   <script>window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/';</script>
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Cesium.js"></script>
-  <script src="/app.js?v=4"></script>
+  <script src="/app.js?v=10"></script>
 </body>
 </html>

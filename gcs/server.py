@@ -8,13 +8,17 @@ import json
 import os
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Gazebo feed now comes from cam_bridge.py (real onboard camera render -> MJPEG),
 # which works under Wayland/Xorg/headless. We just proxy it so the UI stays on one port.
 CAM_BRIDGE_URL = os.environ.get("CAM_BRIDGE_URL", "http://127.0.0.1:8091/video.mjpeg")
-CAM_BRIDGE2_URL = os.environ.get("CAM_BRIDGE2_URL", "http://127.0.0.1:8092/video.mjpeg")  # top-down
+GCS_MODE = os.environ.get("GCS_MODE", "sitl")  # sitl | real
+CAM_BRIDGE2_URL = os.environ.get(
+    "CAM_BRIDGE2_URL", CAM_BRIDGE_URL if GCS_MODE == "real"
+    else "http://127.0.0.1:8092/video.mjpeg")  # real FPV / sim top-down
 
 HERE = os.path.dirname(os.path.abspath(__file__))              # <project-root>/gcs
 ROOT = os.environ.get("MARITIME_ROOT", os.path.dirname(HERE))  # <project-root> (relocatable)
@@ -24,13 +28,19 @@ sys.path.insert(0, os.path.join(ROOT, "ros2_ws/src/maritime_autonomy/maritime_au
 
 import geo  # noqa: E402  (OperatingMap/Zone from the autonomy package)
 import planner as planner_mod  # noqa: E402  (PathPlanner A* over the operating area)
-from fc_iface import MavlinkRestFC  # noqa: E402
+from fc_iface import MavlinkRestFC, FlightControllerError, ensure_mavlink2rest  # noqa: E402
 
 KML = os.path.join(ROOT, "assets/chattogram_zones.kml")
 BASE = {"name": "Base / Port Gate", "lat": 22.318725, "lon": 91.813156}
+# Banani mesh is a 1.6 km square. PX4 overwrites the SDF GPS origin with
+# PX4_HOME_*, so this home is the only point where that texture and the
+# reported GPS describe the same ground.
+BANANI_ORIGIN = (23.793700, 90.406600, 8.0)
+BANANI_RADIUS_M = 900.0
 OP_FILE = os.path.join(HERE, "operating_area.json")   # user-drawn boundary persistence
 CAM2_VIEW_FILE = os.path.join(os.path.expanduser("~"), ".cam2_view")  # 2nd feed: topdown|fpv
 FC = MavlinkRestFC()
+_BUILDINGS = {}  # (lat3, lon3) -> list of {ring, height}
 
 # --- CAAB (Bangladesh Civil Aviation Authority) UAS rule enforced in the sim ---
 # CAC-5 (RPAS, 2019) sec 4(g): max height 200 ft AGL. The 10-NM airport no-fly
@@ -38,6 +48,26 @@ FC = MavlinkRestFC()
 # are the operational no-fly layer instead. Overridable via env.
 CAAB_MAX_ALT_FT = float(os.environ.get("CAAB_MAX_ALT_FT", "200"))
 CAAB_MAX_ALT_M = round(CAAB_MAX_ALT_FT * 0.3048, 2)             # 200 ft -> 60.96 m
+
+
+def sitl_world(lat, lon):
+    """Pick the Gazebo world whose terrain matches the requested home.
+
+    Returns (world, lat, lon, home_alt). home_alt is set only when the home
+    is snapped to a world origin. A click inside the Banani mesh boots
+    banani.sdf at that mesh center. Every other click boots chattogram and
+    keeps the requested coordinates. Missing coordinates stay on chattogram
+    and leave the launch script's own home defaults in place.
+    """
+    sdf = os.path.join(ROOT, "external/PX4-Autopilot/Tools/simulation/gz/worlds/banani.sdf")
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return "chattogram", None, None, None
+    if os.path.isfile(sdf) and geo.haversine_m(
+            lat_f, lon_f, BANANI_ORIGIN[0], BANANI_ORIGIN[1]) <= BANANI_RADIUS_M:
+        return "banani", BANANI_ORIGIN[0], BANANI_ORIGIN[1], BANANI_ORIGIN[2]
+    return "chattogram", lat_f, lon_f, None
 
 
 def caab_clamp_alt(a):
@@ -60,6 +90,62 @@ def load_op_area():
 def save_op_area(poly):
     with open(OP_FILE, "w") as f:
         json.dump({"polygon": poly}, f)
+
+
+def fetch_buildings(lat, lon, radius=700):
+    """OSM building footprints around a point, extruded later in Cesium."""
+    key = (round(lat, 3), round(lon, 3), int(radius))
+    if key in _BUILDINGS:
+        return _BUILDINGS[key]
+    q = (
+        f'[out:json][timeout:40];'
+        f'(way["building"](around:{int(radius)},{lat:.6f},{lon:.6f}););'
+        f'out geom qt;'
+    )
+    out = []
+    data = None
+    last_err = None
+    for url in ("https://overpass-api.de/api/interpreter",
+                "https://overpass.kumi.systems/api/interpreter"):
+        try:
+            req = urllib.request.Request(
+                url, data=q.encode(),
+                headers={"Content-Type": "text/plain",
+                         "User-Agent": "albatross-gcs/1.0"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                data = json.loads(r.read().decode())
+            break
+        except Exception as e:
+            last_err = e
+            data = None
+    try:
+        if data is None:
+            raise last_err or RuntimeError("overpass unreachable")
+        for el in data.get("elements") or []:
+            geom = el.get("geometry") or []
+            if len(geom) < 3:
+                continue
+            ring = [[g["lon"], g["lat"]] for g in geom]
+            tags = el.get("tags") or {}
+            h = None
+            if tags.get("height"):
+                try:
+                    h = float(str(tags["height"]).split()[0])
+                except (TypeError, ValueError):
+                    h = None
+            if h is None and tags.get("building:levels"):
+                try:
+                    h = float(str(tags["building:levels"]).split(";")[0]) * 3.2
+                except (TypeError, ValueError):
+                    h = None
+            out.append({"ring": ring, "height": max(6.0, min(h or 10.0, 80.0))})
+    except Exception as e:
+        print(f"[gcs] buildings fetch failed: {e}")
+        out = []
+    if out:
+        _BUILDINGS[key] = out
+    print(f"[gcs] buildings {len(out)} around {lat:.4f},{lon:.4f}")
+    return out
 
 # ---- build KML GeoJSON once at startup ----
 def build_geojson():
@@ -220,6 +306,8 @@ class H(BaseHTTPRequestHandler):
             self._static(os.path.join(WEB, "style.css"), "text/css")
         elif p == "/drone.glb":
             self._static(os.path.join(WEB, "drone.glb"), "model/gltf-binary")
+        elif p == "/sat.png":
+            self._static(os.path.join(WEB, "sat.png"), "image/png")
         elif p == "/intelis_logo.svg":
             self._static(os.path.join(WEB, "intelis_logo.svg"), "image/svg+xml")
         elif p == "/video.mjpeg":
@@ -234,6 +322,30 @@ class H(BaseHTTPRequestHandler):
             self._send(200, load_op_area())
         elif p == "/api/telemetry":
             self._send(200, FC.telemetry())
+        elif p == "/api/mode":
+            self._send(200, {"mode": GCS_MODE})
+        elif p == "/api/camera/status":
+            if GCS_MODE != "real":
+                return self._send(200, {"ok": True, "source": "simulation"})
+            health_url = urllib.parse.urljoin(CAM_BRIDGE2_URL, "/healthz")
+            try:
+                with urllib.request.urlopen(health_url, timeout=2) as response:
+                    status = json.loads(response.read())
+                status.update(source="front_camera", bridge_connected=True)
+                self._send(200, status)
+            except Exception:
+                self._send(200, {"ok": False, "fresh": False, "source": "front_camera",
+                                 "bridge_connected": False,
+                                 "error": "Front-camera video bridge is unavailable"})
+        elif p == "/api/buildings":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                lat = float(qs.get("lat", [None])[0])
+                lon = float(qs.get("lon", [None])[0])
+            except (TypeError, ValueError):
+                return self._send(400, {"error": "lat,lon required"})
+            r = float(qs.get("r", ["700"])[0])
+            self._send(200, {"buildings": fetch_buildings(lat, lon, r)})
         else:
             self._send(404, {"error": "not found"})
 
@@ -242,8 +354,9 @@ class H(BaseHTTPRequestHandler):
         try:
             up = urllib.request.urlopen(url, timeout=5)
         except Exception as e:
-            return self._send(503, {"error": f"camera bridge not up: {e}. "
-                                    "Launch SITL (starts cam_bridge automatically)."})
+            hint = ("FPV RTSP bridge not up." if GCS_MODE == "real"
+                    else "Launch SITL (starts cam_bridge automatically).")
+            return self._send(503, {"error": f"camera bridge not up: {e}. {hint}"})
         try:
             self.send_response(200)
             self.send_header("Content-Type",
@@ -251,16 +364,22 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             while True:
-                chunk = up.read(16384)
+                chunk = up.read1(16384)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
+        except (OSError, TimeoutError):
             pass
         finally:
             up.close()
 
     def do_POST(self):
+        try:
+            self._handle_post()
+        except FlightControllerError as e:
+            self._send(503, {"ok": False, "error": str(e)})
+
+    def _handle_post(self):
         p = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length", 0))
         try:
@@ -314,6 +433,8 @@ class H(BaseHTTPRequestHandler):
             if isinstance(res, dict) and raw and max(raw) > CAAB_MAX_ALT_M:
                 res["alt_capped_to_m"] = CAAB_MAX_ALT_M
             print(f"[gcs] mission upload: {res}")
+            if isinstance(res, dict) and res.get("ok"):
+                FC.sync_qgc()
             self._send(200, res)
         elif p == "/api/command":
             cmd = body.get("cmd")
@@ -323,6 +444,12 @@ class H(BaseHTTPRequestHandler):
             elif cmd == "stop_mission": FC.stop_mission()
             elif cmd == "start_mission": FC.start_mission()
             elif cmd == "continue_mission": FC.continue_mission()
+            elif cmd == "toggle_mode":
+                # Manual<->Auto toggle (web UI button). Returns the resulting mode
+                # so the UI can update its label without waiting for the next poll.
+                self._send(200, FC.toggle_auto_manual()); return
+            elif cmd == "manual": FC.manual_mode()
+            elif cmd == "auto": FC.continue_mission()
             elif cmd == "reposition":
                 lat = body.get("lat")
                 lon = body.get("lon")
@@ -355,8 +482,22 @@ class H(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "cmd": cmd})
         elif p == "/api/sitl/start":
             try:
-                subprocess.Popen(["bash", os.path.join(ROOT, "launch/launch_chattogram_clean.sh")])
-                self._send(200, {"ok": True, "status": "launching"})
+                mode = body.get("mode", "plan")
+                env = os.environ.copy()
+                world, lat, lon, snap_alt = sitl_world(body.get("lat"), body.get("lon"))
+                env["PX4_GZ_WORLD"] = world
+                if lat is not None and lon is not None:
+                    env["PX4_HOME_LAT"] = f"{lat:.7f}"
+                    env["PX4_HOME_LON"] = f"{lon:.7f}"
+                    alt = snap_alt if snap_alt is not None else body.get("alt", 5.0)
+                    env["PX4_HOME_ALT"] = str(alt)
+                env["SITL_RC_IN_MODE"] = "1" if mode == "manual" else "4"
+                subprocess.Popen(["bash", os.path.join(ROOT, "launch/launch_chattogram_clean.sh")],
+                                 env=env)
+                if mode == "manual":
+                    subprocess.Popen(["bash", os.path.join(ROOT, "launch/mav_hub_sitl_rc.sh")])
+                self._send(200, {"ok": True, "status": "launching", "mode": mode,
+                                 "world": world, "home": {"lat": lat, "lon": lon}})
             except Exception as e:
                 self._send(500, {"ok": False, "error": str(e)})
         elif p == "/api/sitl/stop":
@@ -383,6 +524,7 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    ensure_mavlink2rest()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    print(f"[gcs] serving on http://0.0.0.0:{port}")
+    print(f"[gcs] serving on http://0.0.0.0:{port}  mode={GCS_MODE}")
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()

@@ -33,8 +33,8 @@ pkill -f "mavlink2rest" 2>/dev/null
 cd "$PX4_DIR"
 # GUI: leave HEADLESS UNSET so PX4 launches its own gz gui (which auto-follows the
 # model via /gui/track). Force xcb so the gui doesn't silently crash on Wayland.
-setsid env PX4_GZ_WORLD=chattogram DISPLAY="${DISPLAY:-:0}" QT_QPA_PLATFORM=xcb \
-  PX4_HOME_LAT=22.318725 PX4_HOME_LON=91.813156 PX4_HOME_ALT=5.0 \
+setsid env PX4_GZ_WORLD="${PX4_GZ_WORLD:-chattogram}" DISPLAY="${DISPLAY:-:0}" QT_QPA_PLATFORM=xcb \
+  PX4_HOME_LAT="${PX4_HOME_LAT:-22.318725}" PX4_HOME_LON="${PX4_HOME_LON:-91.813156}" PX4_HOME_ALT="${PX4_HOME_ALT:-5.0}" \
   PX4_GZ_FOLLOW_OFFSET_X=-2 PX4_GZ_FOLLOW_OFFSET_Y=-2 PX4_GZ_FOLLOW_OFFSET_Z=1.5 \
   PX4_SIM_SPEED_FACTOR=4 \
   bash -c "exec make px4_sitl gz_x500 < '$FIFO' >> '$LOG' 2>&1" &
@@ -47,8 +47,10 @@ echo $! > "$HOME/sitl.pgid"
 pkill -f "chase_cam.py" 2>/dev/null
 echo topdown > "$HOME/.cam2_view"
 setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_MODE=chase \
+  GZ_WORLD="${PX4_GZ_WORLD:-chattogram}" \
   python3 "$GCS/chase_cam.py" > "$HOME/chase_cam.log" 2>&1 &
 setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_MODE=topdown \
+  GZ_WORLD="${PX4_GZ_WORLD:-chattogram}" \
   CAM_VIEW_FILE="$HOME/.cam2_view" \
   python3 "$GCS/chase_cam.py" > "$HOME/topdown_cam.log" 2>&1 &
 
@@ -60,14 +62,22 @@ setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_TOPIC=/chase_cam CA
 setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python CAM_TOPIC=/topdown_cam CAM_BRIDGE_PORT=8092 \
   python3 "$GCS/cam_bridge.py" > "$HOME/cam_bridge2.log" 2>&1 &
 
-# Auto-configure PX4 once it's up: arming bypass (SITL) + nose toward travel
-# (MIS_YAWMODE=1 mission, MPC_YAW_MODE=0 guided) + SMOOTH takeoff/landing tuning
-# (gentle thrust ramp, slow/early-decelerating land, low jerk & accel limits).
+# Auto-configure PX4 once it's up: arming bypass (SITL) + nose along the
+# flight path (MPC_YAW_MODE=3, "along trajectory") + smooth takeoff/landing.
+# This firmware has no MIS_YAWMODE; the ramp parameter is MPC_TKO_RAMP_T.
+# MPC_LAND_SPEED cannot go below 0.6 m/s, and a slower value breaks the
+# land detector (LNDMC_Z_VEL_MAX must stay under the landing descent).
+#
+# COM_RC_IN_MODE (manual-control source):
+#   4 = disable manual control  -> Stage 1 (planning sim, autonomous only)
+#   1 = MAVLink only            -> Stage 2 (manual sim flight via rc_to_sitl.py)
+# Override with SITL_RC_IN_MODE env. Default 4 keeps Stage 1 behavior.
+RC_MODE="${SITL_RC_IN_MODE:-4}"
 (
   sleep 12
-  for p in "COM_RC_IN_MODE 4" "CBRK_SUPPLY_CHK 894281" "NAV_DLL_ACT 0" \
-           "NAV_RCL_ACT 0" "COM_RCL_EXCEPT 7" "MIS_YAWMODE 1" "MPC_YAW_MODE 0" \
-           "MPC_TKO_RAMP_TIME 3.0" "MPC_TKO_SPEED 1.0" "MPC_LAND_SPEED 0.4" \
+  for p in "COM_RC_IN_MODE $RC_MODE" "CBRK_SUPPLY_CHK 894281" "NAV_DLL_ACT 0" \
+           "NAV_RCL_ACT 0" "COM_RCL_EXCEPT 7" "MPC_YAW_MODE 3" \
+           "MPC_TKO_RAMP_T 3.0" "MPC_TKO_SPEED 1.0" "MPC_LAND_SPEED 0.6" \
            "MPC_LAND_ALT1 15.0" "MPC_LAND_ALT2 5.0" "MPC_Z_VEL_MAX_DN 1.0" \
            "MPC_JERK_AUTO 3.0" "MPC_ACC_UP_MAX 2.5" "MPC_ACC_DOWN_MAX 2.0" \
            "MPC_ACC_HOR 2.0" "RTL_RETURN_ALT 60.0" "RTL_DESCEND_ALT 30.0"; do

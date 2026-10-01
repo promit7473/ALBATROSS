@@ -24,3 +24,7 @@ external/
 # Editor
 .vscode/
 .idea/
+
+# Over GitHub's 100 MB file limit (kept locally)
+media/Screencast from 08-23-2026 09:14:09 PM.mp4
+media/Screencast from 08-23-2026 09:14:09 PM.webm
