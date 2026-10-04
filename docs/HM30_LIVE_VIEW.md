@@ -65,6 +65,11 @@ The GCS requires a heartbeat received within five seconds to report a live
 aircraft link. Successful command delivery is displayed as a request; the flight
 controller's acceptance must still be checked in live flight status. In real
 mode, Start requires an already armed aircraft and does not arm it implicitly.
+Real mission planning requires live GPS; explicit Auto-RTL uploads also require
+the aircraft-reported home position. The browser cannot substitute the map base
+for aircraft home. See the [user manual](LAUNCH_GUIDE.pdf) for the updated
+boundary, planning and flight-control workflow.
+
 Waypoint mission execution remains the existing PX4 mission implementation;
 these changes do not implement visual navigation or obstacle avoidance.
 
@@ -73,6 +78,7 @@ Offline regression checks:
 ```bash
 python3 -m unittest discover -s gcs/tests -v
 node gcs/tests/test_ui_commands.cjs
+node gcs/tests/test_gui_wiring.cjs
 ```
 
 These checks mock network and aircraft operations. They do not validate the

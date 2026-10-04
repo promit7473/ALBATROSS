@@ -21,6 +21,7 @@
 #   OPEN_BROWSER    1 = open http://localhost:8080 (default 1)
 set -u
 ROOT="${MARITIME_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+python3 "$ROOT/launch/session_preflight.py" 3 || exit 1
 GCS="$ROOT/gcs"
 M2R="${M2R_BIN:-$ROOT/external/mavlink2rest}"
 [ -x "$M2R" ] || M2R="${HOME}/mavlink2rest"

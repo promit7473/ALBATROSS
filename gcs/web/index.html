@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Widgets/widgets.css" />
   <link rel="stylesheet" href="/style.css?v=9" />
+  <link rel="stylesheet" href="/workspace.css?v=10" />
 </head>
 <body>
   <div id="dash">
@@ -28,12 +29,17 @@
       <div id="dashboard">
         <div class="dash-title">DASHBOARD <span id="conn" class="pill off">NO&nbsp;LINK</span></div>
         <div class="dash-vars">
-          <div class="dvar"><span>Ground Spd</span><b id="d-gspd">—</b></div>
-          <div class="dvar"><span>Altitude</span><b id="d-alt">—</b></div>
+          <div class="dvar"><svg class="metric-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16a8 8 0 1 1 16 0M12 12l5-5"/><circle cx="12" cy="12" r="1"/></svg><span>Ground Spd</span><b id="d-gspd">—</b></div>
+          <div class="dvar"><svg class="metric-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M7 8l5-5 5 5M7 16l5 5 5-5"/></svg><span>Altitude</span><b id="d-alt">—</b></div>
           <div class="dvar"><span>Vert Spd</span><b id="d-climb">—</b></div>
           <div class="dvar"><span>Heading</span><b id="d-hdg">—</b></div>
-          <div class="dvar"><span>Mode</span><b id="d-mode">—</b></div>
-          <div class="dvar"><span>Battery</span><b id="d-batt">—</b></div>
+          <div class="dvar"><svg class="metric-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 18-9-5-9 5Z"/></svg><span>Mode</span><b id="d-mode">—</b></div>
+          <div class="dvar"><svg class="metric-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="17" height="12" rx="2"/><path d="M23 10v4M7 9v6M11 9v6"/></svg><span>Battery</span><b id="d-batt">—</b></div>
+          <div class="dvar gps-card"><svg class="metric-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="m3 3 4 4m10 10 4 4M3 8V3h5m8 18h5v-5M17 3l4 4-4 4-4-4ZM3 17l4 4 4-4-4-4Z"/></svg><span>GPS satellites</span><b id="header-gps">—</b></div>
+          <div class="dvar readiness-card" id="header-readiness-card" data-state="offline" role="status" aria-live="polite">
+            <svg class="metric-icon" id="header-readiness-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 8 8 8m0-8-8 8"/></svg>
+            <span id="header-readiness-link">Disconnected</span><b id="header-readiness">Not ready to fly</b>
+          </div>
         </div>
       </div>
 
@@ -79,10 +85,19 @@
           </svg>
         </div>
       </div>
+      <div class="workspace-health"><span id="session-mode">CONNECTING</span><span id="header-link">NO LINK</span><span id="header-rc">RC unknown</span></div>
+      <nav class="workspace-nav" aria-label="Workspace tools">
+        <button id="open-mission" aria-expanded="false" aria-controls="col-right">Mission</button>
+        <button id="open-status" aria-expanded="false" aria-controls="col-left">Details</button>
+        <details class="workspace-settings"><summary>Settings</summary><div class="settings-menu">
+        <button id="display-size" aria-pressed="false" title="Switch between normal and large text">Large text</button>
+        <button id="reset-layout" title="Restore default panel sizes">Reset layout</button>
+        <button id="workspace-fullscreen">Fullscreen</button></div></details>
+      </nav>
     </header>
 
     <!-- ================= LEFT COLUMN ================= -->
-    <aside id="col-left">
+    <aside id="col-left" aria-label="Flight details"><button class="drawer-close" id="close-status">Close details ×</button>
       <section id="hud" class="panel">
         <div class="panel-title">MARITIME&nbsp;GCS</div>
         <div class="row"><span>Mode</span><b id="mode">—</b></div>
@@ -95,6 +110,11 @@
         <div class="row small"><span>Lat/Lon</span><b id="ll">—</b></div>
       </section>
 
+      <section class="panel" aria-labelledby="sensor-health-title">
+        <div class="panel-title" id="sensor-health-title">Sensor health</div>
+        <p class="panel-info">Aircraft reports, not a calibration or flight certification. Reports expire after 5 seconds.</p>
+        <div id="sensor-health-list">Waiting for telemetry</div>
+      </section>
       <section id="flight-ctl" class="panel">
         <div class="panel-title">DRONE&nbsp;VELOCITY&nbsp;+&nbsp;ALT&nbsp;CONTROL <span class="rt">real-time</span></div>
         <div class="vel-readout"><b id="vel-big">0.0</b> <span>m/s ground speed</span></div>
@@ -107,7 +127,7 @@
           <button id="btn-alt-hold" class="ctl-btn">⬍ Alt Hold</button>
           <button id="btn-proceed" class="ctl-btn go">▶ Proceed</button>
         </div>
-        <div class="ctl-hint">Set speed/altitude, then <b>Alt Hold</b> to apply &amp; loiter, or <b>Proceed</b> to resume the mission.</div>
+        <div class="ctl-hint">Speed applies after adjustment. Set altitude, then <b>Alt Hold</b> to apply &amp; loiter; <b>Proceed</b> resumes the mission.</div>
       </section>
 
       <section id="legend" class="panel">
@@ -119,6 +139,7 @@
         <div id="caab-info" class="caab-info">CAAB rules loading…</div>
       </section>
 
+      <section class="panel"><div class="panel-title">Session events</div><ol id="event-log"><li>No flight actions yet</li></ol></section>
       <section id="status" class="panel">
         <div class="panel-title">FLIGHT&nbsp;STATUS</div>
         <div class="row"><span>Flight time</span><b id="st-time">00:00</b></div>
@@ -135,18 +156,26 @@
     <!-- ================= CENTER COLUMN ================= -->
     <main id="col-center">
       <div id="map-cell">
+        <div class="map-toolbar" id="map-toolbar" aria-label="Map tools">
+        <div class="overlay-heading"><span>Map tools</span><button id="minimize-map-tools" aria-label="Minimize map tools" aria-expanded="true" aria-controls="map-toolbar" title="Minimize map tools">−</button></div>
+        <div class="view-tabs" role="group" aria-label="Main view">
+          <button id="view-map" class="selected">2D map</button><button id="view-aircraft">Aircraft 3D</button><button id="view-gps">GPS</button>
+          <button id="maximize-map" title="Maximize or restore map">⛶</button>
+        </div>
+        <div class="map-plan-tools"><button id="pick-destination">⌖ Choose destination</button><span id="draft-summary">No destination selected</span></div>
+        <div id="position-status" role="status">Waiting for aircraft telemetry</div>
+        <button id="btn-locate" class="map-btn map-btn-locate" title="Center map on the aircraft">⌖ Locate</button>
+        </div>
         <div id="map"></div>
         <div id="cesiumContainer"></div>
-        <div id="position-status" role="status">Waiting for aircraft telemetry</div>
         <button id="btn-3d" class="map-btn">🌐 Toggle 3D</button>
-        <button id="btn-locate" class="map-btn map-btn-locate" title="Center map on the aircraft">⌖ Locate</button>
         <div id="ces-tools">
           <button id="btn-3d-follow" class="winbtn">🎥 Follow</button>
           <button id="btn-gps-view" class="winbtn">📡 GPS view</button>
           <button id="btn-2d" class="winbtn">✕ 2D</button>
         </div>
         <div id="gps-hud">
-          <div class="gps-hud-title">GNSS LINK</div>
+          <div class="gps-hud-title">GPS STATUS</div><div class="gps-note">Illustrative satellite orbits</div>
           <div id="gps-hud-stats">waiting…</div>
           <canvas id="gps-skyplot" width="168" height="168"></canvas>
           <div class="gps-hud-legend"><span class="g-lock"></span> locked
@@ -155,33 +184,44 @@
         </div>
       </div>
 
+      <div id="split-main" class="splitter vertical" role="separator" tabindex="0" aria-label="Resize map and cameras" aria-orientation="vertical" aria-valuemin="35" aria-valuemax="80" aria-valuenow="68"></div>
       <div id="cam-row">
         <div class="cam-cell" id="cam-fpv">
-          <div class="cam-bar"><span id="cam2-title">TOP-DOWN CAM</span>
-            <button id="btn-camera-size" class="cam-toggle" title="Enlarge or restore the camera panel">Enlarge</button>
-            <button id="btn-camera-fullscreen" class="cam-toggle" title="Show camera fullscreen">⛶</button>
-            <button id="btn-camera-reset" class="cam-toggle" title="Reset camera size">Reset</button>
-            <button id="btn-feed2-view" class="cam-toggle sitl-only">🎥 FPV</button>
-            <button id="btn-feed2" class="cam-toggle">▶ start</button></div>
-          <div class="cam-body"><img id="feed2-img" alt="Top-down / FPV camera" />
+          <div class="cam-bar"><span id="cam2-title" title="FPV camera">FPV · SIM CAMERA</span>
+            <div class="window-actions" role="group" aria-label="FPV window controls">
+              <button id="btn-feed2" class="cam-toggle feed-toggle" title="Start FPV">▶ start</button>
+              <button id="collapse-fpv" class="cam-toggle" aria-label="Collapse FPV" title="Collapse FPV">−</button>
+              <button id="btn-camera-size" class="cam-toggle" aria-label="Expand FPV" title="Expand FPV">⛶</button>
+              <button id="btn-camera-fullscreen" class="cam-toggle" aria-label="Fullscreen workspace" title="Fullscreen workspace">⛶</button>
+              <button id="btn-camera-reset" class="cam-toggle" hidden>Reset</button>
+              <button id="btn-feed2-view" class="cam-toggle sitl-only" hidden>FPV</button>
+            </div>
+          </div>
+          <div class="cam-body"><img id="feed2-img" alt="Top-down / FPV camera" /><div class="camera-empty" id="feed2-img-empty" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3"/></svg><strong id="feed2-img-state">Stream stopped</strong><span>Use Start in the toolbar to connect.</span></div>
             <div id="fpv-status" class="camera-status" role="status" hidden></div>
           </div>
         </div>
-        <div class="cam-cell sitl-only" id="cam-chase">
-          <div class="cam-bar"><span>CHASE CAM</span>
-            <button id="btn-feed" class="cam-toggle">▶ start</button></div>
-          <div class="cam-body"><img id="feed-img" alt="Chase camera — starts once SITL is running" /></div>
+        <div id="split-cameras" class="splitter horizontal" role="separator" tabindex="0" aria-label="Resize FPV and Gazebo" aria-orientation="horizontal" aria-valuemin="25" aria-valuemax="75" aria-valuenow="52"></div>
+        <div class="cam-cell" id="cam-chase">
+          <div class="cam-bar"><span title="Gazebo simulation camera">GAZEBO · 3D CAMERA</span>
+            <div class="window-actions" role="group" aria-label="Gazebo window controls">
+              <button id="btn-feed" class="cam-toggle feed-toggle" title="Start Gazebo camera">▶ start</button>
+              <button id="collapse-gazebo" class="cam-toggle" aria-label="Collapse Gazebo" title="Collapse Gazebo">−</button>
+              <button id="maximize-gazebo" class="cam-toggle" aria-label="Expand Gazebo" title="Expand Gazebo">⛶</button>
+            </div>
+          </div>
+          <div class="cam-body"><img id="feed-img" alt="Chase camera — starts once SITL is running" /><div class="camera-empty" id="feed-img-empty" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3"/></svg><strong id="feed-img-state">Stream stopped</strong><span>Use Start in the toolbar to connect.</span></div></div>
         </div>
       </div>
     </main>
 
     <!-- ================= RIGHT COLUMN ================= -->
-    <aside id="col-right">
+    <aside id="col-right" aria-label="Mission settings"><button class="drawer-close" id="close-mission">Close mission ×</button>
       <section id="tools" class="panel">
         <div class="panel-title">OPERATING&nbsp;BOUNDARY&nbsp;CONTROL</div>
         <button id="btn-draw">✏️ Draw new</button>
         <button id="btn-edit">✎ Edit / drag</button>
-        <button id="btn-clear">🗑 Clear</button>
+        <button id="btn-clear">↺ Reset</button>
         <button id="btn-save" class="primary">💾 Save</button>
         <div class="panel-info" id="area-info">—</div>
       </section>
@@ -189,9 +229,9 @@
       <section id="mission" class="panel">
         <div class="panel-title">MISSION CONTROL</div>
         <div id="mode-switch">
-          <button id="btn-mode-plan" title="Gazebo planning sim — autonomous, no RC">① Plan</button>
-          <button id="btn-mode-manual" title="Fly the simulator with the real RC. Real motors stay disarmed.">② Manual sim</button>
-          <button id="btn-mode-twin" class="active" title="Digital twin: live GPS + FPV + 3D at the real aircraft. Props stay off.">③ Digital twin</button>
+          <button id="btn-mode-plan" class="sitl-only" title="Gazebo planning sim — autonomous, no RC">① Plan</button>
+          <button id="btn-mode-manual" class="sitl-only" title="Fly the simulator with the real RC. Real motors stay disarmed.">② Manual sim</button>
+          <button id="btn-mode-twin" class="active" title="Live aircraft GPS, FPV and 3D. Flight controls act on the connected aircraft.">③ Digital twin</button>
         </div>
         <div class="mrow sitl-only" style="margin-bottom: 8px;">
           <button id="btn-sitl-start" class="go" style="background:#059669;border-color:#10b981;">🚀 Launch SITL</button>
@@ -207,7 +247,10 @@
           <label class="chk"><input type="checkbox" id="chk-rtl" checked /> Auto-RTL @</label>
           <input id="rtl-alt" class="rtl-alt" type="number" value="60" min="10" max="60" /> m
         </div>
-        <button id="btn-upload" class="primary">⬆ Upload mission</button>
+        <button id="btn-upload" class="primary">⬆ Upload &amp; verify</button>
+        <button id="read-aircraft-mission">Read aircraft mission / QGC changes</button>
+        <div class="panel-info">Battery and link-loss failsafes are configured on the aircraft in QGC. The browser does not provide these failsafes.</div>
+        <div id="aircraft-mission-info" class="panel-info">QGC drafts are independent. Read the aircraft mission after a QGC upload.</div>
         <div class="mrow">
           <button id="btn-arm">🔓 Arm</button>
           <button id="btn-fly" class="go">▶ Start</button>
@@ -223,12 +266,35 @@
       </section>
     </aside>
 
+    <div id="flight-overlay" aria-label="Flight controls">
+      <div class="overlay-heading"><span>Flight controls</span><button id="minimize-flight-controls" aria-label="Minimize flight controls" aria-expanded="true" aria-controls="flight-overlay" title="Minimize flight controls">−</button></div>
+      <div class="flight-capsule"><span id="flight-readiness">Waiting for telemetry</span><span id="mission-sync">Draft · not uploaded</span></div>
+      <div class="control-mode" role="group" aria-label="Flight control mode">
+        <span id="confirmed-mode">Mode unknown</span><button id="control-manual">RC manual</button><button id="control-auto">Resume auto</button>
+        <button id="land-here">Land here</button>
+      </div>
+      <div class="flight-orbs">
+        <button id="flight-go" class="orb orb-go" disabled aria-describedby="flight-readiness">ARM</button>
+        <button id="flight-hold" class="orb orb-hold" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg><span>HOVER</span></button>
+        <button id="flight-home" class="orb orb-home" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 3l9 8M6 10v11h12V10M10 21v-7h4v7"/></svg><span>RETURN</span></button>
+      </div>
+      <div id="flight-message" role="status" aria-live="polite">Choose a destination to begin.</div>
+    </div>
+    <div class="emergency-control"><button id="emergency-open" class="orb orb-kill" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg><span>STOP</span></button><span>Aircraft<br>Motor stop</span></div>
+    <dialog id="emergency-dialog" aria-labelledby="emergency-title">
+      <h2 id="emergency-title">Emergency motor stop</h2>
+      <p>This requests forced disarming. An airborne aircraft can fall. This is not hover or landing.</p>
+      <p>The command requires a working aircraft link.</p>
+      <label><input id="emergency-confirm" type="checkbox"> I intend to stop the motors now.</label>
+      <div class="dialog-actions"><button id="emergency-cancel">Cancel</button><button id="emergency-send" disabled>STOP MOTORS</button></div>
+    </dialog>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
   <script>window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/';</script>
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Cesium.js"></script>
-  <script src="/app.js?v=10"></script>
+  <script src="/app.js?v=12"></script>
+  <script src="/workspace.js?v=8"></script>
 </body>
 </html>

@@ -5,6 +5,7 @@ Serves the web UI, proxies live telemetry from the FC interface, and exposes the
 KML operating area + exclusion zones as GeoJSON. No web framework -- stdlib only.
 """
 import json
+import math
 import os
 import subprocess
 import sys
@@ -75,8 +76,22 @@ def caab_clamp_alt(a):
     try:
         a = float(a)
     except (TypeError, ValueError):
-        return CAAB_MAX_ALT_M
+        raise ValueError('Altitude must be a positive finite number')
+    if not math.isfinite(a) or a <= 0:
+        raise ValueError('Altitude must be a positive finite number')
     return min(a, CAAB_MAX_ALT_M)
+
+
+def coordinate_pair(value):
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        raise ValueError('Expected a latitude/longitude pair')
+    lat, lon = value[:2]
+    if (isinstance(lat, bool) or isinstance(lon, bool)
+            or not isinstance(lat, (int, float)) or not isinstance(lon, (int, float))
+            or not math.isfinite(lat) or not math.isfinite(lon)
+            or not -90 <= lat <= 90 or not -180 <= lon <= 180):
+        raise ValueError('Invalid latitude/longitude')
+    return lat, lon
 
 
 def load_op_area():
@@ -247,7 +262,7 @@ def route_to_mission(route, alt, rtl=True, is_airborne=False, hold_s=15.0,
 
     n_out = len(wps)
     for i, p in enumerate(wps):
-        is_last_out = (i == n_out - 1) and not return_wps
+        is_last_out = (i == n_out - 1)
         hold = hold_s if is_last_out else 0.0
         items.append({"command": "MAV_CMD_NAV_WAYPOINT", "lat": p[0], "lon": p[1],
                       "alt": _alt_of(p, alt), "p1": hold})
@@ -257,8 +272,20 @@ def route_to_mission(route, alt, rtl=True, is_airborne=False, hold_s=15.0,
                       "alt": _alt_of(p, alt), "p1": 0.0})
 
     if rtl and rtl_alt is not None and home_lat is not None and home_lon is not None:
-        items.append({"command": "MAV_CMD_NAV_WAYPOINT", "lat": home_lat,
-                      "lon": home_lon, "alt": caab_clamp_alt(rtl_alt), "p1": 0.0})
+        end = (return_wps or route)[-1]
+        pp = get_planner()
+        if pp.is_blocked(home_lat, home_lon):
+            raise ValueError('Return home is outside the operating boundary or inside an exclusion')
+        try:
+            back = pp.plan(tuple(end[:2]), (home_lat, home_lon))
+        except RuntimeError as e:
+            raise ValueError(f'Cannot plan return home: {e}') from e
+        if any(pp.segment_blocked(a, b) for a, b in zip(back, back[1:])):
+            raise ValueError('No clear return path; revise the mission boundary')
+        # First attain the return altitude at the final outbound position.
+        for lat, lon in back:
+            items.append({"command": "MAV_CMD_NAV_WAYPOINT", "lat": lat,
+                          "lon": lon, "alt": caab_clamp_alt(rtl_alt), "p1": 0.0})
         items.append({"command": "MAV_CMD_NAV_LAND", "lat": home_lat,
                       "lon": home_lon, "alt": 0.0})
     elif rtl:
@@ -300,6 +327,8 @@ class H(BaseHTTPRequestHandler):
         p = self.path.split("?")[0]
         if p == "/" or p == "/index.html":
             self._static(os.path.join(WEB, "index.html"), "text/html")
+        elif p in ("/workspace.js", "/workspace.css"):
+            self._static(os.path.join(WEB, p[1:]), "application/javascript" if p.endswith(".js") else "text/css")
         elif p == "/app.js":
             self._static(os.path.join(WEB, "app.js"), "application/javascript")
         elif p == "/style.css":
@@ -378,6 +407,10 @@ class H(BaseHTTPRequestHandler):
             self._handle_post()
         except FlightControllerError as e:
             self._send(503, {"ok": False, "error": str(e)})
+        except (ValueError, TypeError, KeyError, IndexError) as e:
+            self._send(400, {"ok": False, "error": str(e)})
+        except OSError as e:
+            self._send(503, {"ok": False, "error": str(e)})
 
     def _handle_post(self):
         p = self.path.split("?")[0]
@@ -386,8 +419,17 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             return self._send(400, {"error": "bad json"})
+        if not isinstance(body, dict):
+            raise ValueError('JSON body must be an object')
+        if GCS_MODE != 'sitl' and p in ('/api/sitl/start', '/api/sitl/stop', '/api/gazebo/follow'):
+            return self._send(409, {"ok": False, "error": "Simulator controls require SITL mode"})
         if p == "/api/operating_area":
             poly = body.get("polygon")   # [[lat,lon],...] ring, or null to clear
+            if poly is not None:
+                if not isinstance(poly, list) or len(poly) < 3:
+                    raise ValueError('Boundary requires at least three points')
+                for point in poly:
+                    coordinate_pair(point)
             save_op_area(poly)
             npts = len(poly) if poly else 0
             print(f"[gcs] operating area saved ({npts} pts)")
@@ -408,24 +450,54 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, {"ok": False, "error": str(e)})
         elif p == "/api/mission/upload":
             route = body["route"]
+            if not isinstance(route, list) or len(route) < 2:
+                raise ValueError('Plan a route with at least two points before uploading')
+            pp = get_planner()
+            for point in route:
+                coordinate_pair(point)
+                if len(point) > 2 and (not math.isfinite(float(point[2])) or float(point[2]) <= 0):
+                    raise ValueError('Mission altitudes must be positive finite numbers')
+            if any(pp.segment_blocked(a, b) for a, b in zip(route, route[1:])):
+                raise ValueError('Route crosses an exclusion or the current boundary; plan again')
             alt = body.get("alt", 40)
+            caab_clamp_alt(alt)
             rtl = body.get("rtl", True)
             is_airborne = body.get("is_airborne", False)
             hold_s = body.get("hold_s", 15.0)
+            hold_s = float(hold_s)
+            if not math.isfinite(hold_s) or hold_s < 0:
+                raise ValueError('Hold time must be a non-negative finite number')
             return_wps = body.get("return_wps")
+            if return_wps:
+                for point in return_wps:
+                    coordinate_pair(point)
+                    _alt_of(point, alt)
+                legs = [route[-1]] + return_wps
+                if any(pp.segment_blocked(a, b) for a, b in zip(legs, legs[1:])):
+                    raise ValueError('Return waypoints cross an exclusion or the boundary')
             rtl_alt = body.get("rtl_alt")
+            if rtl and rtl_alt is not None:
+                caab_clamp_alt(rtl_alt)
             home_lat = body.get("home_lat")
             home_lon = body.get("home_lon")
-            if not home_lat or not home_lon:
+            if GCS_MODE == 'real':
                 t = FC.telemetry()
-                home_lat = t.get("lat", 22.318725)
-                home_lon = t.get("lon", 91.813156)
+                if not t.get('connected'):
+                    raise FlightControllerError('No live aircraft connection')
+                is_airborne = bool(t.get('armed')) and t.get('rel_alt', 0) > 2
+                home_lat, home_lon = t.get('home_lat'), t.get('home_lon')
+                if rtl and rtl_alt is not None:
+                    if home_lat is None or home_lon is None:
+                        raise FlightControllerError('Aircraft home position unavailable; wait for HOME_POSITION')
+                    coordinate_pair([home_lat, home_lon])
+            elif home_lat is None or home_lon is None:
+                home_lat, home_lon = route[0][:2]
             items = route_to_mission(route, alt, rtl=rtl, is_airborne=is_airborne,
                                      hold_s=hold_s, return_wps=return_wps,
                                      rtl_alt=float(rtl_alt) if rtl and rtl_alt else None,
                                      home_lat=home_lat if rtl and rtl_alt else None,
                                      home_lon=home_lon if rtl and rtl_alt else None)
-            res = FC.upload_mission(items)
+            res = FC.upload_verified(items)
             # flag if any requested altitude was pulled down to the CAAB ceiling
             raw = [float(p[2]) for p in route if len(p) >= 3] + [float(alt)]
             if rtl and rtl_alt:
@@ -436,23 +508,31 @@ class H(BaseHTTPRequestHandler):
             if isinstance(res, dict) and res.get("ok"):
                 FC.sync_qgc()
             self._send(200, res)
+        elif p == "/api/mission/read":
+            self._send(200, FC.inspect_mission())
+        elif p == "/api/flight":
+            action = body.get('action')
+            if action == 'emergency_stop' and body.get('confirmation') != 'STOP MOTORS':
+                raise ValueError('Explicit emergency motor-stop confirmation required')
+            self._send(200, FC.execute(action, body.get('mission_token')))
         elif p == "/api/command":
             cmd = body.get("cmd")
-            if cmd == "arm": FC.arm(True)
-            elif cmd == "disarm": FC.arm(False)
-            elif cmd == "rtl": FC.rtl()
-            elif cmd == "stop_mission": FC.stop_mission()
-            elif cmd == "start_mission": FC.start_mission()
-            elif cmd == "continue_mission": FC.continue_mission()
-            elif cmd == "toggle_mode":
-                # Manual<->Auto toggle (web UI button). Returns the resulting mode
-                # so the UI can update its label without waiting for the next poll.
-                self._send(200, FC.toggle_auto_manual()); return
-            elif cmd == "manual": FC.manual_mode()
-            elif cmd == "auto": FC.continue_mission()
+            actions = {'arm':'arm', 'disarm':'disarm', 'rtl':'rtl',
+                       'start_mission':'start', 'continue_mission':'resume',
+                       'manual':'manual', 'auto':'resume'}
+            if cmd in actions:
+                return self._send(200, FC.execute(actions[cmd], body.get('mission_token')))
+            elif cmd == 'stop_mission':
+                return self._send(200, FC.clear_verified())
+            elif cmd == 'toggle_mode':
+                main, _ = FC.current_mode()
+                action = 'manual' if main == 4 else 'resume'
+                result = FC.execute(action, body.get('mission_token'))
+                return self._send(200, dict(result, to='manual' if action == 'manual' else 'auto'))
             elif cmd == "reposition":
                 lat = body.get("lat")
                 lon = body.get("lon")
+                coordinate_pair([lat, lon])
                 alt = caab_clamp_alt(body.get("alt", 40))   # respect the CAAB ceiling
                 # never fly direct into or across a no-fly zone
                 pp = get_planner()
@@ -460,6 +540,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": False, "reason": "goal_blocked",
                         "error": "Goal is inside a no-fly zone. Pick another point or use Plan route."})
                 tel = FC.telemetry()
+                if not tel.get('connected') or tel.get('lat') is None or tel.get('lon') is None:
+                    raise FlightControllerError('Live aircraft GPS required for reposition')
                 if tel.get("lat") is not None and pp.segment_blocked((tel["lat"], tel["lon"]), (lat, lon)):
                     return self._send(200, {"ok": False, "reason": "path_blocked",
                         "error": "Direct path crosses a no-fly zone. Use Plan route (it detours)."})

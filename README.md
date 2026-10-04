@@ -32,14 +32,17 @@ flowchart LR
   KML[("KML operating area<br/>+ exclusions")] --> GCS
 ```
 
-Full write-up: [`docs/SYSTEM_OVERVIEW.pdf`](docs/SYSTEM_OVERVIEW.pdf) ·
-launch guide: [`docs/LAUNCH_GUIDE.pdf`](docs/LAUNCH_GUIDE.pdf).
+User manual (launch, GUI operation and troubleshooting):
+[`docs/LAUNCH_GUIDE.pdf`](docs/LAUNCH_GUIDE.pdf)
+([editable source](docs/LAUNCH_GUIDE.tex)).
+Architecture: [`docs/SYSTEM_OVERVIEW.pdf`](docs/SYSTEM_OVERVIEW.pdf).
 
 ## Features
 
-- **Exclusion-aware path planning** — A* over the KML operating area; the drone
-  **never enters a no-fly zone**, even if a waypoint is dropped inside one (it is
-  clamped to the nearest safe point and the leg is routed around the zone).
+- **Exclusion-aware path planning** — A* over the saved operating boundary and
+  KML exclusions. Blocked waypoints are moved to a safe edge; review the planned
+  endpoint before upload. Uploaded segments are checked against current geometry.
+  This is a sampled/grid prototype, not a flight-safety guarantee.
 - **Multi-waypoint mission editor** — drop an ordered chain of waypoints, each with
   its **own altitude**; adjustable auto-RTL return altitude.
 - **Live web GCS** — 2D map (Leaflet) + 3D view (Cesium), telemetry HUD, arm /
@@ -106,10 +109,17 @@ control disabled). Pure autonomous mission planning.
 bash launch/start.sh 1      # = launch/start_all.sh
 ```
 
-Open **http://localhost:8080**, give the sim ~15 s, click **Gazebo feed**.
+Open **http://localhost:8080**, allow roughly 15 s for warmup, and click **start**
+in the **CHASE CAM** or **TOP-DOWN CAM** pane. Check LINK and received position.
 
 > **➕ Add waypoints** → **Plan route** (routes around no-fly zones) →
 > **Upload mission** → **Arm** → **Start**.
+
+After drawing/editing the boundary, click **Save** before planning. Boundary
+**Reset** restores the default KML polygon and also requires Save. Waypoint or
+boundary edits clear the preview; replan before uploading. The default whole-metre
+altitude limit is 60 m. Auto-RTL adds a planned return and landing at upload; the
+map preview currently shows only the outbound route.
 
 ### Stage 2 — Manual control in the sim (RC receiver wireless)
 
@@ -155,11 +165,52 @@ Pixhawk USB → `:14550` / `:14555`) + `rtsp_bridge.py` (FPV MJPEG on `:8091`)
 + QGroundControl. No Gazebo, no SITL-only bypass params — set RC/datalink
 failsafe (`NAV_RCL_ACT`, `NAV_DLL_ACT`, `COM_RCL_EXCEPT`) in QGC.
 
-Restart just the web layer after code changes (leaves the sim/Pixhawk running):
+Real missions require live aircraft GPS for planning and aircraft-reported home
+for explicit Auto-RTL uploads. **Start** requires separate arming. A flight-command
+“request sent” message means delivery; confirm its effect in live telemetry.
+Simulator start/stop controls are unavailable in real mode.
+
+For SITL, restart the web server and chase camera after Python changes (leaves
+PX4/Gazebo running):
 
 ```bash
-bash launch/restart_gcs.sh
+GCS_MODE=sitl bash launch/restart_gcs.sh
 ```
+
+Reload the browser for GUI-only changes. The restart helper starts a Gazebo chase
+camera; for a grounded real-hardware session, rerun Stage 3 with the same settings
+instead. Stage 3 also restarts the telemetry relay, video bridge and QGroundControl.
+
+## Compact operator workspace
+
+The map, FPV and Gazebo camera are docked panes with shared resize dividers,
+maximize/collapse controls and saved split proportions. The main view retains
+**2D map / Aircraft 3D / GPS** tabs. **Mission** and **Details** open drawers.
+
+Use **Choose destination** to create and plan a quick draft. The floating round
+**ARM** button requests arming; after telemetry confirms it, a separate **GO**
+press uploads, reads back and starts the mission. **HOVER**, **RETURN**, RC manual,
+Resume auto and Land here remain accessible over the views. The guarded red
+**STOP** control requests emergency forced disarm, which can cause an airborne
+vehicle to fall; it is distinct from hover and landing.
+
+Web mission transfers are serialized and verified against aircraft readback.
+**Read aircraft mission / QGC changes** displays a separate amber aircraft route.
+QGC is never restarted for synchronization. Draft editors remain independent;
+use one mission writer at a time. New flight actions check command acknowledgements
+and wait for telemetry confirmation. Gazebo is a streamed 3D camera view, not an
+interactive embedded Gazebo client. Local-position-only hover is not implemented.
+
+Offline checks (no vehicle connection):
+
+```bash
+python3 -m unittest discover -s gcs/tests -v
+node gcs/tests/test_ui_commands.cjs
+node gcs/tests/test_workspace.cjs
+```
+
+The workspace suite also runs the existing GUI wiring tests. Browser rendering,
+video, and physical flight behavior need host/SITL verification.
 
 ## Ports
 

@@ -5,6 +5,8 @@
 \usepackage{enumitem}
 \usepackage[colorlinks=true,urlcolor=blue,linkcolor=black]{hyperref}
 \usepackage{parskip}
+\usepackage{longtable,array}
+\hypersetup{pdftitle={ALBATROSS User Manual},pdfsubject={Launch and GUI operation, October 2026}}
 
 \definecolor{bg}{gray}{0.96}
 \definecolor{cmt}{rgb}{0.30,0.45,0.30}
@@ -17,109 +19,311 @@
   showstringspaces=false, xleftmargin=6pt, xrightmargin=6pt,
 }
 
-\title{\vspace{-1.5em}ALBATROSS --- Terminal Launch Guide\\
-\large Chattogram Port SITL + Gazebo chase-cam feed}
+\title{\vspace{-1.5em}ALBATROSS --- User Manual\\
+\large Launch, mission planning and ground-control operation}
 \author{}
-\date{\today}
+\date{Updated 4 October 2026}
 
 \begin{document}
 \maketitle
 \vspace{-2em}
 
-\section{What launches}
-One command brings up the whole stack. The pieces:
-\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
-  \item \textbf{GCS web server} (\texttt{server.py}) on \texttt{http://localhost:8080} --- map, mission planner, telemetry, feed proxy.
-  \item \textbf{PX4 SITL + Gazebo} (\texttt{gz\_x500}) in the \texttt{chattogram} world, home at the port.
-  \item \textbf{Chase camera} (\texttt{chase\_cam.py}) --- spawns an invisible camera that follows the drone from behind/above and publishes \texttt{/chase\_cam}.
-  \item \textbf{Camera bridge} (\texttt{cam\_bridge.py}) --- encodes \texttt{/chase\_cam} to MJPEG on \texttt{:8091}; the web UI's feed proxies it.
-  \item \textbf{mavlink2rest} --- MAVLink $\rightarrow$ REST on \texttt{:8088} for telemetry/commands.
+\section{Start here}
+ALBATROSS is a browser ground-control station for PX4 simulation and connected
+real aircraft. Open \url{http://localhost:8080} after launching the required stage.
+The map, mission editor, telemetry, aircraft 3D view and camera panes share this page.
+
+For a first prototype session, use \textbf{Stage 1: planning simulation}. The
+October GUI changes passed offline checks; browser rendering, camera streaming
+and live mission execution still require verification on the host. This manual
+describes implemented behavior, not a completed flight test.
+
+\section{Docked workspace and floating controls}
+The workspace uses larger labels, telemetry values and circular controls. Choose
+\textbf{Large text} in the header for additional scaling; \textbf{Normal text}
+restores the default. The preference persists across reloads. Primary flight icons
+are consistent SVG shapes with text labels. Keyboard focus and reduced-motion
+preferences are supported.
+
+Details includes a bounded, per-browser \textbf{Session events} log of flight
+requests, acknowledgements, confirmations and failures. A lost aircraft connection
+shows how long ago telemetry was last received and revokes backend mission
+verification. The launchers now check for conflicting real/simulation relay
+processes before restarting services. A blocked launch lists PIDs without stopping
+them. See \texttt{docs/SITL\_ACCEPTANCE.md} for the repeatable host acceptance run.
+
+The map is the main pane; one FPV pane and a labelled Gazebo 3D camera pane sit
+beside it. Gazebo is a streamed simulation camera, not an embedded interactive
+Gazebo application. In real mode that pane explains that simulation is unavailable.
+The \textbf{2D map}, \textbf{Aircraft 3D} and \textbf{GPS} tabs switch the main view.
+
+Drag the shared dividers to resize neighboring panes. Focus a divider and use
+arrow keys for keyboard resizing. \textbf{Expand} maximizes a pane; Restore returns
+to the split layout. The minus button collapses a camera pane. \textbf{Reset layout}
+restores defaults. Split proportions are saved in the browser. Fullscreen applies
+to the complete workspace, keeping flight controls visible.
+
+\textbf{Mission} opens the waypoint/boundary/settings drawer. \textbf{Details}
+opens detailed telemetry and altitude/speed controls. Close the drawer or press
+Escape to return to the views. The round flight controls float above the workspace;
+no permanent bottom control panel consumes viewing space.
+
+\textbf{Quick mission:} click \textbf{Choose destination}, then click the 2D map.
+This replaces the local draft and plans a route automatically. Review the route,
+altitude and Auto-RTL settings in Mission. With a valid position and connection,
+press \textbf{ARM}, then wait for telemetry to confirm arming. A separate
+\textbf{GO} press uploads and reads back the mission, verifies it again before
+starting, and requests mission mode. No GO action implicitly arms the aircraft.
+
+\textbf{HOVER} requests PX4 hold without clearing the mission. The prototype
+requires a fresh global position/altitude and checks estimator absolute-position
+flags when available; local-position-only hover is not implemented. The flight
+controller decides whether the request is acceptable. \textbf{RETURN} requests
+RTL using the aircraft's settings. \textbf{RC manual} requests pilot control;
+\textbf{Resume auto} resumes the current mission item after readback verification.
+Real-mode RC takeover requires fresh received RC channels with nonzero reported
+RSSI (unknown RSSI is shown as unverified signal strength, not a measured quality).
+The RC indicator shows observed input, not a guarantee of receiver reliability.
+\textbf{Land here} is a separate confirmed action.
+
+The red \textbf{STOP} circle opens the emergency motor-stop dialog. It requires
+explicit acknowledgement before sending forced disarm (not flight termination).
+An airborne aircraft can fall. The normal Disarm action remains in the Mission
+drawer. Emergency motor stop bypasses the normal command lock but still depends
+on a live communication link and aircraft response. Its physical behavior has
+not been flight-tested in this session.
+
+Flight actions show pending/accepted state and wait for received telemetry before
+claiming the requested state. A timeout means the outcome is unknown; check the
+aircraft/QGC before retrying. Link loss disables the controls and invalidates the
+browser's mission verification. A QGC mission-ID change also invalidates it when
+the aircraft publishes supported IDs; readback before start/resume is always used.
+
+\textbf{Read aircraft mission / QGC changes} in Mission downloads the stored
+mission and draws supported navigation items in amber. The blue local draft is
+unchanged. This is read-only inspection, not bidirectional draft synchronization.
+QGC must still download the aircraft mission after a web upload. QGC is no longer
+restarted automatically in either real or simulation mode. Use one mission writer
+at a time; web locking cannot prevent QGC from starting an independent transfer.
+
+\section{Choose and launch a stage}
+Run commands from the repository root. Simulation requires the project's PX4
+SITL build/world, ROS 2 Humble and Gazebo installation. The launchers expect
+\texttt{external/PX4-Autopilot} and \texttt{external/mavlink2rest}; see the README
+for dependency setup. The browser loads map imagery and JavaScript libraries
+from internet services.
+
+\begin{lstlisting}
+# Stage 1: autonomous planning simulation, no RC input
+GCS_MODE=sitl bash launch/start.sh 1
+
+# Stage 2: simulated aircraft flown using a real RC receiver
+GCS_MODE=sitl bash launch/start.sh 2
+
+# Stage 3: connected real aircraft, no Gazebo
+bash launch/start.sh 3
+\end{lstlisting}
+Choose \emph{one} stage. These launchers restart shared GCS/MAVLink services;
+changing stages interrupts the current connection. Run the scripts as files,
+not by pasting their contents into a terminal.
+
+\textbf{Stage 1} starts the web server, MAVLink bridge, PX4 SITL, Gazebo and
+chase/top-down cameras. Allow roughly 15 seconds for simulator and camera warmup;
+use live status rather than elapsed time to decide whether the connection is ready.
+
+\textbf{Stage 2} additionally reads RC channels from a USB-connected Pixhawk and
+forwards them to SITL. The receiver remains wired to the Pixhawk; the web GCS and
+QGroundControl control the simulator. If the USB device is missing, the launcher
+reports that the RC bridge did not start. Check \texttt{\textasciitilde/rc\_bridge.log}.
+
+\textbf{Stage 3} starts the real-aircraft MAVLink relay, web GCS, front-camera
+bridge and QGroundControl. It does not apply SITL arming bypasses. The camera and
+telemetry links are independent. See \texttt{docs/HM30\_LIVE\_VIEW.md} for connection
+checks and \texttt{docs/QGC\_SETUP.md} for QGroundControl setup.
+
+In the Mission drawer, the in-page \textbf{Plan}, \textbf{Manual sim} and \textbf{Launch SITL} buttons
+launch simulation processes in a SITL session. They do not switch a real-aircraft
+server into simulation mode. Simulator controls are hidden in real mode and the
+server rejects simulator start/stop/follow requests there. \textbf{Digital twin}
+(or \textbf{Aircraft 3D} in real mode) opens a visualization; flight controls still
+act on the connected aircraft.
+
+\section{Read the connection and displays}
+\begin{itemize}[leftmargin=1.4em,itemsep=3pt]
+  \item \textbf{LINK} means a recent aircraft heartbeat is available.
+    \textbf{NO LINK} means current flight state is unavailable, even if video plays.
+  \item A heartbeat alone does not provide position. Wait for usable GPS before
+    planning a real mission. The position banner distinguishes missing telemetry
+    from a connected aircraft waiting for GPS. The 3D model hides without position;
+    a faded 2D marker can remain at the last received location.
+  \item Dashboard values show received speed, relative altitude, heading, mode
+    and battery data. Dashes indicate unavailable values. Heading is aircraft
+    orientation, not direction of travel; missing attitude data dims the horizon.
+  \item \textbf{Locate} centers/follows the aircraft when position is available.
+    Before GPS, browser location permission can center the map on the operator.
+    Dragging the map disables following; click Locate to resume.
+  \item \textbf{Aircraft 3D} opens the aircraft view; \textbf{2D map} returns to the map.
+    The 3D \textbf{Follow} button tracks the model. Route edits/clears update both
+    views. If the 3D library is unavailable, the GUI returns to 2D and reports it.
+  \item \textbf{GPS view} includes an illustrative satellite constellation.
+    Its satellite positions and inferred locks are not measured orbital data;
+    use the received GPS fix, satellite count and accuracy readouts for status.
 \end{itemize}
 
-\section{Launch from the terminal}
-\textbf{One-shot (recommended)} --- from the project root (e.g.\ \texttt{\textasciitilde/albatross}):
+\section{Set the operating boundary}
+The initial boundary is the saved polygon, or the default KML boundary if none
+has been saved. Exclusion zones are drawn in red.
+\begin{enumerate}[leftmargin=1.6em]
+  \item Click \textbf{Draw new} and draw a polygon (double-click to finish), or
+    \textbf{Edit / drag} to change the existing boundary.
+  \item Click \textbf{Save}. Wait for the ``Boundary saved'' message.
+  \item To restore the default KML boundary, click \textbf{Reset}, then Save.
+\end{enumerate}
+Any boundary edit or reset clears the planned route. Planning remains blocked
+until the edited boundary is saved. A failed save leaves the edits unsaved; correct
+the reported error and retry. If the boundary changes during saving, save again.
+Saving a boundary does not alter a mission already uploaded to the aircraft.
+
+\section{Plan and upload a mission}
+\begin{enumerate}[leftmargin=1.6em]
+  \item Check the operating boundary and connection. In real mode, wait for live
+    aircraft GPS and reported home position.
+  \item Set \textbf{Altitude}, click \textbf{Add waypoints}, then click the map in
+    the intended order. Click Add waypoints again to leave placement mode.
+  \item Edit individual heights in the waypoint list; the remove control deletes
+    a waypoint. The waypoint \textbf{Clear} button removes the local draft.
+    These edits clear the preview, not the aircraft's uploaded mission.
+  \item Click \textbf{Plan route (avoids no-fly)}. The planner routes around
+    exclusions within the saved boundary. A blocked target may be moved to a safe
+    edge; review the warning and resulting endpoint before uploading.
+  \item Set \textbf{Auto-RTL @} and its return altitude as required. With this
+    option enabled, the uploaded mission includes a return-altitude waypoint at
+    the final outbound point, a planned return path and a landing item. In real
+    mode the destination is the aircraft-reported home, not the map's default base.
+    If home is unavailable, the upload fails with an explanatory message.
+  \item Click \textbf{Upload \& verify} and wait for success. Upload waits for a new
+    addressed aircraft mission acknowledgement and verifies stored items by readback. Invalid routes or routes crossing the
+    current boundary/exclusions are rejected; plan again if the boundary changed.
+  \item Click the floating \textbf{ARM}, verify the received armed state, then \textbf{GO}.
+    In real mode Arm asks for confirmation, and GO requires the aircraft to be
+    armed separately. Confirm the resulting mode in live telemetry.
+\end{enumerate}
+
+The default configured altitude ceiling is 60.96 m; whole-metre GUI editors use
+60 m. The minimum waypoint altitude is 5 m and the return-altitude input minimum
+is 10 m. Server configuration can change the ceiling. This software limit is not
+an assessment of permission to fly at a location.
+
+Replan after changing waypoint positions/heights or the boundary. An old route
+is cleared before a new planning request; late responses cannot restore a route
+after further edits. Plan and Upload disable while their requests are pending.
+
+\textbf{Preview limitation:} the map/3D preview shows the outbound route only.
+Return segments are generated and checked at upload. With Auto-RTL unchecked,
+the uploader adds no automatic return/landing sequence; final behavior depends
+on the flight controller. The separate \textbf{RTL} button requests PX4's RTL
+mode and uses its configured return behavior, not the mission editor's explicit
+return-leg construction.
+
+\section{Flight controls}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.25\linewidth} >{\raggedright\arraybackslash}p{0.68\linewidth}}
+\textbf{Control} & \textbf{Behavior} \\ \hline
+\endhead
+ARM / Disarm & Sends the corresponding request. Normal Disarm is in Mission. The label follows received armed state. \\
+GO & Uploads if needed, reads back the aircraft mission, then starts from its first item. Requires separate arming in both modes. \\
+Resume auto & Verifies the aircraft mission and requests mission mode from the current item. It does not restart from item zero. \\
+RC manual / Resume auto & RC manual requests pilot position control (POSCTL by default); Resume auto continues the verified mission. This is separate from the Manual sim launcher. \\
+Target spd & Changing the input/slider sends a speed request after a short pause (about 0.5 s). No Alt Hold click is required for speed. \\
+Altitude / Alt Hold & Adjusting altitude sets the target for new waypoints. Alt Hold applies it at the current received position and requests a hold. It requires live GPS. \\
+Fly to last WP & Requests a direct reposition to the final draft waypoint and its height. Requires live GPS; blocked destinations or direct paths are rejected. Use Plan route for a detour. \\
+RETURN & Requests the flight controller's return-to-launch mode. Verify the mode change in telemetry. \\
+Stop / Clear mission & Requests hold/loiter and clears the aircraft mission. On successful delivery it clears the local route preview. It is not a land or disarm command. Upload again before starting a replacement mission. \\
+Drop Cargo & After confirmation, sends the configured payload servo request. Actual release depends on aircraft actuator setup. \\
+\end{longtable}
+
+Flight commands wait for matching aircraft acknowledgements. Acceptance is not
+confirmed execution; floating controls additionally wait for the requested telemetry state. Check live mode, armed state and motion. Mission-upload acknowledgement
+is distinct from flight-command acknowledgement. If a command fails, read the
+mission status message before retrying.
+
+\section{Camera operation}
+In SITL, click \textbf{start} in the \textbf{CHASE CAM} or \textbf{TOP-DOWN CAM}
+pane. The second pane's \textbf{FPV / Top-Down} button changes its simulated view.
+The feeds can initially show a waiting image while Gazebo starts.
+
+In real mode, the \textbf{FRONT CAMERA} pane starts automatically. Its status shows
+live, waiting, paused or bridge unavailable. Video status does not establish an
+aircraft telemetry connection. Use \textbf{stop/start} to pause/resume the pane,
+\textbf{Enlarge}, fullscreen or the resize corner to inspect the video, and
+\textbf{Reset} to restore the camera size. This Reset is separate from boundary Reset.
+
+\section{Troubleshooting}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.30\linewidth} >{\raggedright\arraybackslash}p{0.63\linewidth}}
+\textbf{Message or symptom} & \textbf{Next step} \\ \hline
+\endhead
+Operating mode unavailable & Check the web server, then reload. The GUI does not assume simulation for arming when mode discovery fails. \\
+No live heartbeat / NO LINK & Check the selected stage and MAVLink bridge/relay. Camera video alone is insufficient. \\
+Waiting for GPS / reposition rejected & Wait for valid received aircraft position. Operator geolocation and the map center are not aircraft GPS. \\
+Save edited boundary & Save successfully, then plan a new route. Boundary editing invalidates the previous preview. \\
+Home position unavailable & Wait for aircraft HOME\_POSITION before an explicit real-aircraft return-home upload. Browser coordinates cannot substitute for it. \\
+Route crosses boundary / exclusion & Check the saved boundary and waypoints, then replan. Uploaded segments are checked again against current geometry. \\
+3D unavailable / blank map & Check the internet connection for CDN scripts, imagery and terrain; use 2D if 3D is unavailable. \\
+Camera waiting / bridge unavailable & Check the camera bridge and source independently of telemetry. See the HM30 guide for real-camera network checks. \\
+GO reports disarmed & Arm separately and verify the armed state before GO. \\
+\end{longtable}
+
+Read-only service checks:
 \begin{lstlisting}
-bash launch/start_all.sh
+curl --max-time 3 http://localhost:8080/api/mode
+curl --max-time 3 http://localhost:8080/api/telemetry
+curl --max-time 3 http://localhost:8091/healthz
+# Real-mode front camera health through the GCS:
+curl --max-time 3 http://localhost:8080/api/camera/status
 \end{lstlisting}
-This sources the ROS 2 / Gazebo environment, kills any stale instances, then starts
-the web server and \texttt{launch/launch\_chattogram\_clean.sh} (SITL + chase cam +
-bridge), all detached so they survive the terminal closing. Paths are self-locating,
-so the folder can live anywhere and be named anything (override with
-\texttt{MARITIME\_ROOT}). PX4-Autopilot and mavlink2rest are expected as symlinks in
-\texttt{external/}.
+Useful logs are \texttt{\textasciitilde/gcs\_server.log},
+\texttt{\textasciitilde/sitl\_clean.log}, \texttt{\textasciitilde/chase\_cam.log}
+and \texttt{\textasciitilde/rc\_bridge.log} for simulation, plus
+\texttt{\textasciitilde/mav\_hub.log}, \texttt{\textasciitilde/mavlink2rest.log}
+and \texttt{\textasciitilde/rtsp\_bridge.log} for real hardware.
 
-\textbf{Then open} \url{http://localhost:8080} and click the \texttt{Gazebo feed} button.
-
-\medskip
-\emph{Warning:} do \textbf{not} paste the launcher's contents inline. It runs
-\texttt{pkill -f "cam\_bridge.py"} etc.; if those strings are in your shell's own
-command line, \texttt{pkill} kills the shell. Always run it as a \emph{file}.
-
-\section{Manual launch (if you want the pieces separately)}
+\section{Reload, restart and stop}
+Reload the browser after GUI changes. Python changes require restarting the GCS
+process. For a SITL session, the existing helper restarts the web server and chase
+camera while leaving PX4/Gazebo running:
 \begin{lstlisting}
-# run from the project root
-# 1) environment
-source /opt/ros/humble/setup.bash
-source external/PX4-Autopilot/Tools/simulation/gz/setup.sh
-
-# 2) GCS web server (:8080)
-python3 gcs/server.py 8080
-
-# 3) SITL + chase cam + bridge + mavlink2rest (in another terminal)
-bash launch/launch_chattogram_clean.sh
+GCS_MODE=sitl bash launch/restart_gcs.sh
 \end{lstlisting}
+This helper starts a Gazebo chase camera and is not the real-hardware restart
+workflow. For a grounded real-hardware session, rerun Stage 3 with the same
+connection settings; it also restarts the relay, video bridge and QGroundControl.
 
-\section{Verify it is up ($\sim$15\,s warmup)}
+\textbf{Stop SITL} terminates simulator, MAVLink bridge and simulation-camera
+processes; it leaves the web server running. It does not replace the aircraft
+\textbf{Stop / Clear mission} control. In Stage 2, the RC bridge is a separate
+process and is not stopped by the Stop SITL endpoint.
+
+\section{Prototype checks and limitations}
+The offline checks exercise UI bindings, route editing, error handling, mission
+construction and mocked aircraft responses:
 \begin{lstlisting}
-# web server responding
-curl -s http://localhost:8080/api/kml | head -c 60
-
-# telemetry connected (expect "connected": true, 3D fix)
-curl -s http://localhost:8080/api/telemetry
-
-# camera feed producing fresh frames
-curl -s http://localhost:8091/healthz     # -> {"ok": true, "fresh": true}
+python3 -m unittest discover -s gcs/tests -v
+node gcs/tests/test_ui_commands.cjs
+node gcs/tests/test_workspace.cjs
 \end{lstlisting}
-The chase-cam feed needs $\sim$15\,s after boot (Gazebo render-engine warmup);
-until then the feed shows a ``Waiting for Gazebo camera\ldots'' placeholder.
-
-\section{Arming \& mission flow}
-The launcher \emph{auto-applies} the SITL-only arming bypass plus the smooth-flight
-and yaw params about 12\,s after boot, so no manual step is normally needed. To set
-them by hand, write to the pxh FIFO:
-\begin{lstlisting}
-for p in "COM_RC_IN_MODE 4" "CBRK_SUPPLY_CHK 894281" \
-         "NAV_DLL_ACT 0" "NAV_RCL_ACT 0" "COM_RCL_EXCEPT 7"; do
-  echo "param set $p" > ~/.px4_stdin; sleep 0.4
-done
-echo "param save" > ~/.px4_stdin
-\end{lstlisting}
-Full flow in the UI: \textbf{Add waypoints} (each with its own height) $\rightarrow$
-\textbf{Plan route} (routes around no-fly zones) $\rightarrow$ \textbf{Upload}
-$\rightarrow$ \textbf{Arm} $\rightarrow$ \textbf{Start}.
-
-\section{Stop everything}
-\begin{lstlisting}
-# from the UI: click "Stop SITL", or from the terminal:
-pkill -f "gz sim"; pkill -f cam_bridge.py; pkill -f chase_cam.py
-pkill -f mavlink2rest; pkill -f "bin/px4"
-\end{lstlisting}
-
-\section{Why the feed is a chase cam (not a screen grab)}
-The old feed screen-scraped the desktop with \texttt{ffmpeg x11grab}, which returns
-an all-black frame under this \textbf{Wayland} session (XWayland is rootless).
-The current feed renders a real Gazebo camera on the GPU and streams it, so it works
-under Wayland, Xorg, or fully headless. \texttt{chase\_cam.py} moves that camera to
-track the drone every tick using the same \texttt{set\_pose} service the project's
-\texttt{imu\_sim\_bridge} uses.
+As of this update, 55 Python and 27 JavaScript tests pass. These do not establish
+physical link reliability, browser rendering, camera operation or flight behavior.
+The planner uses sampled/grid geometry; it is not a formally verified flight-safety
+system. QGroundControl must download the aircraft mission after web upload to
+inspect it; the two draft editors are not synchronized.
 
 \section*{Ports at a glance}
 \begin{tabular}{ll}
-\texttt{8080} & GCS web UI + API + \texttt{/video.mjpeg} proxy \\
-\texttt{8091} & chase-cam MJPEG bridge \\
+\texttt{8080} & GCS web UI, API and video proxy routes \\
 \texttt{8088} & mavlink2rest REST API \\
-\texttt{14555} & PX4 $\rightarrow$ mavlink2rest (UDP) \\
-\texttt{14550} & PX4 $\rightarrow$ QGroundControl (UDP, zero-config) \\
+\texttt{8091} & SITL chase camera or real front-camera MJPEG bridge \\
+\texttt{8092} & SITL second camera (top-down / FPV) \\
+\texttt{14555} & MAVLink to web bridge (UDP) \\
+\texttt{14550} & MAVLink to QGroundControl (UDP) \\
 \end{tabular}
 
 \end{document}

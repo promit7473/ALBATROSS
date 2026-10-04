@@ -10,12 +10,15 @@ import re
 import struct
 import subprocess
 import time
+import threading
+import uuid
 import urllib.request
 from datetime import datetime, timezone
 
 M2R = "http://127.0.0.1:8088"
 _VEH = "/v1/mavlink/vehicles/1/components/1/messages"
 TGT_SYS, TGT_COMP = 1, 1
+GCS_SYS, GCS_COMP = 246, 190  # distinct from QGC and the RC bridge
 TELEMETRY_MAX_AGE_S = 5.0
 
 
@@ -23,7 +26,7 @@ class FlightControllerError(RuntimeError):
     """A command could not be delivered or its prerequisites are unavailable."""
 
 
-def _fresh(record):
+def _record_age(record):
     """mavlink2rest keeps messages after link loss; check reception time."""
     try:
         stamp = record["status"]["time"]["last_update"]
@@ -32,11 +35,72 @@ def _fresh(record):
                        lambda m: "." + (m.group(1) + "000000")[:6], stamp)
         updated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
         if updated.tzinfo is None:
-            return False
+            return None
         age = (datetime.now(timezone.utc) - updated).total_seconds()
-        return 0 <= age <= TELEMETRY_MAX_AGE_S
+        return age if age >= 0 else None
     except (KeyError, TypeError, ValueError, AttributeError):
-        return False
+        return None
+
+
+def _fresh(record):
+    age = _record_age(record)
+    return age is not None and age <= TELEMETRY_MAX_AGE_S
+
+
+def sensor_health(messages):
+    """Read-only diagnostics. Never infer health from a flag without presence."""
+    rows = []
+    def row(name, source, state, detail):
+        age = _record_age(messages.get(source))
+        if age is None: state, detail = 'unknown', 'No timestamped report'
+        elif age > TELEMETRY_MAX_AGE_S: state, detail = 'stale', 'Report expired'
+        rows.append(dict(name=name, state=state, detail=detail,
+                         age_s=round(age, 1) if age is not None else None))
+    def flag(value, name, bit):
+        if isinstance(value, int): return bool(value & bit)
+        if isinstance(value, dict): value = value.get('bits', value.get('type', ''))
+        if isinstance(value, int): return bool(value & bit)
+        return name in str(value).replace('|', ' ').replace(',', ' ').split()
+    system = (messages.get('SYS_STATUS') or {}).get('message', {})
+    for name, suffix, bit in [('Gyroscope','3D_GYRO',1),('Accelerometer','3D_ACCEL',2),
+            ('Compass','3D_MAG',4),('Barometer','ABSOLUTE_PRESSURE',8),('RC receiver','RC_RECEIVER',65536)]:
+        key = 'MAV_SYS_STATUS_SENSOR_' + suffix
+        present = flag(system.get('onboard_control_sensors_present'),key,bit)
+        enabled = flag(system.get('onboard_control_sensors_enabled'),key,bit)
+        healthy = flag(system.get('onboard_control_sensors_health'),key,bit)
+        state, detail = ('unknown','Not reported present') if not present else (
+            ('warning','Reported disabled') if not enabled else (
+            ('healthy','Reported healthy') if healthy else ('warning','Reported unhealthy')))
+        row(name,'SYS_STATUS',state,detail)
+    gps = (messages.get('GPS_RAW_INT') or {}).get('message', {})
+    fix = gps.get('fix_type', {})
+    fix = fix.get('type') if isinstance(fix,dict) else fix
+    row('GPS','GPS_RAW_INT','healthy' if _gps_fix_ok(fix) else 'warning',
+        str(fix or 'Unknown fix').replace('GPS_FIX_TYPE_','') + ' · ' + str(gps.get('satellites_visible','—')) + ' satellites')
+    distance = (messages.get('DISTANCE_SENSOR') or {}).get('message', {})
+    cm = distance.get('current_distance')
+    valid = (isinstance(cm,(int,float)) and math.isfinite(cm) and
+             distance.get('min_distance',float('inf')) <= cm <= distance.get('max_distance',-1)
+             and distance.get('signal_quality') != 1)
+    orientation = distance.get('orientation', {})
+    orientation = orientation.get('type') if isinstance(orientation,dict) else orientation
+    downward = orientation in (25,'MAV_SENSOR_ROTATION_PITCH_270')
+    row('Downward range' if downward else 'Range sensor','DISTANCE_SENSOR',
+        'healthy' if valid else 'warning', f'{cm / 100:.2f} m · quality {distance.get("signal_quality", "unknown")}' if valid else 'Invalid or unavailable range')
+    battery = (messages.get('BATTERY_STATUS') or {}).get('message', {})
+    current = battery.get('current_battery')
+    row('Battery current','BATTERY_STATUS','healthy' if isinstance(current,(int,float)) and current > 0 else 'unknown',
+        ('0 A reported; sensing unverified' if current == 0 else f'{current / 100:.2f} A') if isinstance(current,(int,float)) and current >= 0 else 'Current unavailable')
+    estimator = (messages.get('ESTIMATOR_STATUS') or {}).get('message', {})
+    flags = estimator.get('flags', '')
+    constant = flag(flags,'ESTIMATOR_CONST_POS_MODE',128)
+    row('Position estimator','ESTIMATOR_STATUS','warning' if constant else 'unknown',
+        'Constant-position mode; navigation not confirmed' if constant else 'Report available; readiness checked separately')
+    heartbeat = (messages.get('HEARTBEAT') or {}).get('message', {})
+    state = heartbeat.get('system_status', {})
+    state = state.get('type') if isinstance(state,dict) else state
+    row('Aircraft state','HEARTBEAT','healthy' if state in (3,4,'MAV_STATE_STANDBY','MAV_STATE_ACTIVE') else 'warning',str(state or 'Unknown').replace('MAV_STATE_',''))
+    return rows
 
 
 def _armed(message):
@@ -83,7 +147,7 @@ def _get(path, timeout=2.0):
 
 
 def _post(message):
-    body = json.dumps({"header": {"system_id": 255, "component_id": 0, "sequence": 0},
+    body = json.dumps({"header": {"system_id": GCS_SYS, "component_id": GCS_COMP, "sequence": 0},
                        "message": message}).encode()
     req = urllib.request.Request(M2R + "/v1/mavlink", data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
@@ -154,6 +218,12 @@ def _gps_fix_ok(fix):
 class MavlinkRestFC(FCInterface):
     def __init__(self):
         self._streams_asked = False
+        self.mission_lock = threading.Lock()
+        self.command_lock = threading.Lock()
+        self.uploaded_items = None
+        self.mission_token = None
+        self.mission_id = None
+        self.interrupted = threading.Event()
 
     def _ask_position_streams(self):
         """Ask PX4 to emit GPS / global / home at a usable rate (once)."""
@@ -161,7 +231,7 @@ class MavlinkRestFC(FCInterface):
             return
         self._streams_asked = True
         # msg ids: GPS_RAW_INT=24, GPS_STATUS=25, GLOBAL_POSITION_INT=33, HOME_POSITION=242
-        for msgid, us in ((24, 200000), (25, 1000000), (33, 200000), (242, 1000000)):
+        for msgid, us in ((24, 200000), (25, 1000000), (33, 200000), (242, 1000000), (65, 500000), (230, 500000), (42, 500000)):
             self._cmd("MAV_CMD_SET_MESSAGE_INTERVAL",
                       (msgid, us, 0, 0, 0, 0, 0))
         self._cmd("MAV_CMD_REQUEST_MESSAGE", (242, 0, 0, 0, 0, 0, 0))
@@ -174,6 +244,11 @@ class MavlinkRestFC(FCInterface):
         hb = messages.get("HEARTBEAT")
         if not _fresh(hb):
             self._streams_asked = False
+            # A disconnected/rebooted vehicle must not inherit a previous mission
+            # authorization held by another tab or an in-flight web request.
+            self.mission_token = None
+            self.mission_id = None
+            self.interrupted.set()
             return {"connected": False}
         try:
             self._ask_position_streams()
@@ -186,12 +261,28 @@ class MavlinkRestFC(FCInterface):
         hud = live("VFR_HUD")
         gps = live("GPS_RAW_INT")
         gpsst = live("GPS_STATUS")
+        rc = live("RC_CHANNELS")
+        mission = live("MISSION_CURRENT")
+        estimator = live("ESTIMATOR_STATUS")
         sysst = live("SYS_STATUS")
         att = live("ATTITUDE")
         # Home is event-driven and may legitimately be older than telemetry.
         home = messages.get("HOME_POSITION")
         altm = live("ALTITUDE")
-        t = {"connected": True}
+        t = {"connected": True, "sensor_health": sensor_health(messages)}
+        t['rc_available'] = bool(rc and rc['message'].get('chancount', 0) > 0
+                                 and rc['message'].get('rssi', 255) != 0)
+        t['rc_status'] = 'receiving' if t['rc_available'] else 'unknown'
+        if rc:
+            rssi = rc['message'].get('rssi', 255)
+            t['rc_rssi'] = rssi if isinstance(rssi, (int, float)) and 0 <= rssi < 255 else None
+        t['mission_token'] = self.mission_token
+        if mission:
+            m = mission['message']
+            t.update(mission_seq=m.get('seq'), mission_total=m.get('total'), mission_id=m.get('mission_id'))
+            if self.mission_id and m.get('mission_id') and self.mission_id != m['mission_id']:
+                self.mission_token = None
+                t.update(mission_token=None, mission_changed=True)
         fix_ok = None
         if gps:
             m = gps["message"]
@@ -263,6 +354,17 @@ class MavlinkRestFC(FCInterface):
             m = hb["message"]
             t["armed"] = _armed(m)
             t["custom_mode"] = m.get("custom_mode")
+        # Conservatively require a global position and, when supplied, estimator
+        # horizontal/vertical absolute-position flags. PX4 still decides acceptance.
+        position_ok = 'lat' in t and 'lon' in t and t.get('rel_alt') is not None
+        if estimator:
+            flags = estimator['message'].get('flags', 0)
+            if isinstance(flags, dict): flags = flags.get('bits', [])
+            if isinstance(flags, int):
+                position_ok = position_ok and bool(flags & 16) and bool(flags & 32) and not bool(flags & 128)
+            else:
+                position_ok = position_ok and 'POS_HORIZ_ABS' in str(flags) and 'POS_VERT_ABS' in str(flags) and 'CONST_POS_MODE' not in str(flags)
+        t['position_hold_available'] = bool(position_ok)
         return t
 
     # ---------------- commands ----------------
@@ -350,17 +452,17 @@ class MavlinkRestFC(FCInterface):
 
     def reposition(self, lat, lon, alt):
         # MAV_CMD_DO_REPOSITION = 192 (flies directly to coordinates in guided mode)
-        self._cmd("MAV_CMD_DO_REPOSITION", (-1, 1, 0, float('nan'), lat, lon, alt))
+        self.checked_command("MAV_CMD_DO_REPOSITION", (-1, 1, 0, float('nan'), lat, lon, alt))
         return True
 
     def set_speed(self, speed, kind=1):
         # MAV_CMD_DO_CHANGE_SPEED = 178; p1=type (1=ground speed), p2=speed m/s, p3=throttle(-1)
-        self._cmd("MAV_CMD_DO_CHANGE_SPEED", (kind, float(speed), -1, 0, 0, 0, 0))
+        self.checked_command("MAV_CMD_DO_CHANGE_SPEED", (kind, float(speed), -1, 0, 0, 0, 0))
         return True
 
     def set_servo(self, channel=1, pwm=2000):
         # MAV_CMD_DO_SET_SERVO = 183 (releases payload via PWM relay / actuator)
-        self._cmd("MAV_CMD_DO_SET_SERVO", (channel, pwm, 0, 0, 0, 0, 0))
+        self.checked_command("MAV_CMD_DO_SET_SERVO", (channel, pwm, 0, 0, 0, 0, 0))
         return True
 
     def set_param(self, name, value, ptype="MAV_PARAM_TYPE_REAL32"):
@@ -382,13 +484,13 @@ class MavlinkRestFC(FCInterface):
     # ---------------- mission upload (MISSION_INT protocol) ----------------
     def _mreq_counter(self):
         d = _get(f"{_VEH}/MISSION_REQUEST_INT")
-        if not d:
+        if not self._mission_reply(d):
             return None
         return d["status"]["time"]["counter"], d["message"]["seq"]
 
     def _mack(self):
         d = _get(f"{_VEH}/MISSION_ACK")
-        if not d:
+        if not self._mission_reply(d):
             return None
         mt = d["message"].get("mavtype")
         mt = mt.get("type") if isinstance(mt, dict) else mt
@@ -411,11 +513,14 @@ class MavlinkRestFC(FCInterface):
         sent = set()
         last_req_ctr = base_req_ctr
         while time.time() - t0 < 20.0:
+            if self.interrupted.is_set():
+                raise FlightControllerError("Mission operation interrupted by a flight control")
             # ACK => done (accepted) or failed (error type)
             ack = self._mack()
             if ack is not None and ack[0] != base_ack_ctr:
                 if ack[1] == "MAV_MISSION_ACCEPTED":
-                    _post({"type": "MISSION_SET_CURRENT", "seq": 0, "target_system": TGT_SYS, "target_component": TGT_COMP})
+                    if len(sent) != n:
+                        return {"ok": False, "error": "Premature mission acknowledgement; upload not verified"}
                     return {"ok": True, "count": n}
                 return {"ok": False, "error": ack[1], "sent": sorted(sent)}
             r = self._mreq_counter()
@@ -444,40 +549,216 @@ class MavlinkRestFC(FCInterface):
                "target_system": TGT_SYS, "target_component": TGT_COMP,
                "mission_type": {"type": "MAV_MISSION_TYPE_MISSION"}})
 
-    # ---------------- QGC mission sync ----------------
+    # QGC is an independent client. Never kill/restart it to refresh its editor.
     def sync_qgc(self):
-        """Make the mission just uploaded via the web GCS appear in
-        QGroundControl's Plan view.
+        return
 
-        QGC's PlanManager only loads missions during initial vehicle connection
-        (InitialConnectStateMachine) — it ignores unsolicited MISSION_COUNT and
-        even disconnects its message handler when idle. So the only reliable way
-        to surface a mission uploaded by a *different* GCS (us, via mavlink2rest)
-        is to restart QGC: it re-connects to PX4 on :14550 and re-downloads the
-        stored mission as part of its connect sequence.
+    @staticmethod
+    def _enum(value):
+        return value.get('type') if isinstance(value, dict) else value
 
-        Runs in a daemon thread so the web request returns immediately; QGC
-        restarts ~2 s later. Set QGC_AUTO_SYNC=0 to suppress (e.g. headless)."""
-        # Never interrupt a real operator's GCS to refresh its mission display.
-        # Use QGC's Download from Vehicle action after uploading through the web.
-        if os.environ.get("GCS_MODE") == "real":
-            return
-        if os.environ.get("QGC_AUTO_SYNC", "1") != "1":
-            return
-        import threading
-        threading.Thread(target=self._sync_qgc_thread, daemon=True).start()
+    def _mission_reply(self, record):
+        if not record or not _fresh(record):
+            return False
+        m = record.get('message', {})
+        return (m.get('target_system') == GCS_SYS and m.get('target_component') == GCS_COMP
+                and self._enum(m.get('mission_type')) in (0, 'MAV_MISSION_TYPE_MISSION'))
 
-    def _sync_qgc_thread(self):
+    def _wait_record(self, name, baseline, predicate, timeout=4):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.interrupted.is_set() and name.startswith('MISSION_'):
+                raise FlightControllerError('Mission operation interrupted by a flight control')
+            d = _get(f'{_VEH}/{name}', timeout=1)
+            if d and _fresh(d) and d.get('status', {}).get('time', {}).get('counter') != baseline:
+                if predicate(d['message']):
+                    return d
+            time.sleep(.08)
+        raise FlightControllerError(f'{name} timed out; result is unknown. Check aircraft state before retrying.')
+
+    @staticmethod
+    def _counter(d):
+        return (d or {}).get('status', {}).get('time', {}).get('counter')
+
+    def checked_command(self, command, params=(0,)*7, emergency=False):
+        # Emergency bypasses normal command serialization. Never retry a potentially
+        # non-idempotent flight action automatically after an ambiguous timeout.
+        acquired = False
+        if not emergency:
+            acquired = self.command_lock.acquire(blocking=False)
+            if not acquired:
+                raise FlightControllerError('Another flight command is pending')
         try:
-            time.sleep(2.0)
-            subprocess.run(["pkill", "-KILL", "-f", "QGroundControl"],
-                           capture_output=True, timeout=5)
-            time.sleep(1.5)
-            root = os.environ.get(
-                "MARITIME_ROOT",
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            subprocess.Popen(["bash", os.path.join(root, "launch", "qgc.sh")],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print("[fc_iface] QGC restarted — will re-download mission from PX4")
-        except Exception as e:
-            print(f"[fc_iface] QGC sync (restart) failed: {e}")
+            baseline = self._counter(_get(f'{_VEH}/COMMAND_ACK'))
+            self._cmd(command, params)
+            d = self._wait_record('COMMAND_ACK', baseline, lambda m:
+                self._enum(m.get('command')) == command
+                and m.get('target_system') == GCS_SYS and m.get('target_component') == GCS_COMP)
+            result = self._enum(d['message'].get('result'))
+            if result not in (0, 5, 'MAV_RESULT_ACCEPTED', 'MAV_RESULT_IN_PROGRESS'):
+                raise FlightControllerError(f'Aircraft rejected command: {result}')
+            return {'ok': True, 'accepted': True, 'result': result}
+        finally:
+            if acquired: self.command_lock.release()
+
+    def download_mission(self):
+        baseline = self._counter(_get(f'{_VEH}/MISSION_COUNT'))
+        _post({'type': 'MISSION_REQUEST_LIST', 'target_system': TGT_SYS,
+               'target_component': TGT_COMP, 'mission_type': {'type': 'MAV_MISSION_TYPE_MISSION'}})
+        reply = self._wait_record('MISSION_COUNT', baseline, lambda m:
+            m.get('target_system') == GCS_SYS and m.get('target_component') == GCS_COMP
+            and self._enum(m.get('mission_type')) in (0, 'MAV_MISSION_TYPE_MISSION'))
+        count = int(reply['message']['count'])
+        if not 0 <= count <= 2000:
+            raise FlightControllerError('Invalid aircraft mission count')
+        items = []
+        for seq in range(count):
+            baseline = self._counter(_get(f'{_VEH}/MISSION_ITEM_INT'))
+            _post({'type': 'MISSION_REQUEST_INT', 'seq': seq, 'target_system': TGT_SYS,
+                   'target_component': TGT_COMP, 'mission_type': {'type': 'MAV_MISSION_TYPE_MISSION'}})
+            d = self._wait_record('MISSION_ITEM_INT', baseline, lambda m:
+                m.get('seq') == seq and m.get('target_system') == GCS_SYS
+                and m.get('target_component') == GCS_COMP
+                and self._enum(m.get('mission_type')) in (0, 'MAV_MISSION_TYPE_MISSION'))
+            items.append(d['message'])
+        _post({'type': 'MISSION_ACK', 'target_system': TGT_SYS, 'target_component': TGT_COMP,
+               'mavtype': {'type': 'MAV_MISSION_ACCEPTED'}, 'mission_type': {'type': 'MAV_MISSION_TYPE_MISSION'}})
+        return items, reply['message'].get('opaque_id')
+
+    def verify_uploaded(self):
+        if not self.uploaded_items:
+            raise FlightControllerError('Upload a mission from this workspace first')
+        actual, mission_id = self.download_mission()
+        matches = len(actual) == len(self.uploaded_items)
+        for want, got in zip(self.uploaded_items, actual):
+            expected_frame = want.get('frame', 'MAV_FRAME_GLOBAL_RELATIVE_ALT')
+            frame = self._enum(got.get('frame'))
+            if frame == 'MAV_FRAME_GLOBAL_RELATIVE_ALT_INT': frame = 'MAV_FRAME_GLOBAL_RELATIVE_ALT'
+            matches = matches and self._enum(got.get('command')) == want['command'] and frame == expected_frame
+            for key, value in [('x', round(want.get('lat', 0)*1e7)), ('y', round(want.get('lon', 0)*1e7)),
+                               ('z', want.get('alt', 0)), *[(f'param{i}', want.get(f'p{i}', 0)) for i in range(1, 5)]]:
+                try:
+                    a, b = float(got.get(key, 0)), float(value)
+                    matches = matches and (math.isclose(a, b, rel_tol=0, abs_tol=.01) or (math.isnan(a) and math.isnan(b)))
+                except (TypeError, ValueError): matches = False
+        if not matches:
+            self.mission_token = None
+            raise FlightControllerError('Aircraft mission changed or differs from draft. Review and upload again.')
+        self.mission_id = mission_id or None
+
+    def upload_verified(self, items):
+        if not self.mission_lock.acquire(blocking=False):
+            raise FlightControllerError('Another mission transfer is in progress')
+        try:
+            self.interrupted.clear()
+            self.mission_token = None
+            result = self.upload_mission(items)
+            if not result.get('ok'): return result
+            self.uploaded_items = items
+            self.verify_uploaded()
+            if self.interrupted.is_set():
+                raise FlightControllerError("Upload verification interrupted")
+            self.mission_token = uuid.uuid4().hex
+            return dict(result, verified=True, mission_token=self.mission_token)
+        finally:
+            self.mission_lock.release()
+
+    def clear_verified(self):
+        self.execute('hold')
+        if not self.mission_lock.acquire(blocking=False):
+            raise FlightControllerError('Hold requested; mission transfer is stopping. Retry clear after it finishes.')
+        try:
+            self.interrupted.clear()
+            self.mission_token = None
+            self.uploaded_items = None
+            baseline = self._counter(_get(f'{_VEH}/MISSION_ACK'))
+            _post({'type':'MISSION_CLEAR_ALL', 'target_system':TGT_SYS, 'target_component':TGT_COMP,
+                   'mission_type':{'type':'MAV_MISSION_TYPE_MISSION'}})
+            ack = self._wait_record('MISSION_ACK', baseline, lambda m:
+                m.get('target_system') == GCS_SYS and m.get('target_component') == GCS_COMP
+                and self._enum(m.get('mission_type')) in (0, 'MAV_MISSION_TYPE_MISSION'))
+            if self._enum(ack['message'].get('mavtype')) not in (0, 'MAV_MISSION_ACCEPTED'):
+                raise FlightControllerError('Aircraft rejected mission clear')
+            items, _ = self.download_mission()
+            if items: raise FlightControllerError('Aircraft still has mission items after clear')
+            return {'ok':True, 'verified':True}
+        finally:
+            self.mission_lock.release()
+
+    def inspect_mission(self):
+        if not self.mission_lock.acquire(blocking=False):
+            raise FlightControllerError('Another mission transfer is in progress')
+        try:
+            self._heartbeat()
+            self.interrupted.clear()
+            items, mission_id = self.download_mission()
+            # MAVLink uses NaN for unspecified yaw/parameters. JSON does not.
+            def json_value(value):
+                if isinstance(value, float) and not math.isfinite(value):
+                    return None
+                if isinstance(value, dict):
+                    return {key: json_value(v) for key, v in value.items()}
+                if isinstance(value, list):
+                    return [json_value(v) for v in value]
+                return value
+            return {'ok': True, 'items': json_value(items), 'mission_id': mission_id}
+        finally:
+            self.mission_lock.release()
+
+    def _require_navigation(self, require_home=False):
+        t = self.telemetry()
+        if not t.get('connected') or not t.get('position_hold_available'):
+            raise FlightControllerError('Navigation unavailable: valid live position required')
+        if require_home:
+            lat, lon = t.get('home_lat'), t.get('home_lon')
+            if (not isinstance(lat, (int, float)) or not isinstance(lon, (int, float))
+                    or not math.isfinite(lat) or not math.isfinite(lon)
+                    or not -90 <= lat <= 90 or not -180 <= lon <= 180):
+                raise FlightControllerError('Aircraft home position unavailable')
+        return t
+
+    def execute(self, action, token=None):
+        if action in ('start', 'resume'):
+            if not self.mission_lock.acquire(blocking=False):
+                raise FlightControllerError('Another mission transfer is in progress')
+            try:
+                self.interrupted.clear()
+                if not token or token != self.mission_token:
+                    raise FlightControllerError('Mission is not verified for this draft. Upload and review first.')
+                self.verify_uploaded()
+                if not _armed(self._heartbeat()['message']):
+                    raise FlightControllerError('Arm separately and confirm armed state before starting')
+                if self.interrupted.is_set(): raise FlightControllerError('Mission start interrupted')
+                self._require_navigation()
+                if action == 'start':
+                    self.checked_command('MAV_CMD_DO_SET_MISSION_CURRENT', (0, 1, 0, 0, 0, 0, 0))
+                if self.interrupted.is_set(): raise FlightControllerError('Mission start interrupted')
+                # Recheck after the mission-current acknowledgement: position may have been lost.
+                self._require_navigation()
+                if self.interrupted.is_set(): raise FlightControllerError('Mission start interrupted')
+                return self.checked_command('MAV_CMD_DO_SET_MODE', (1, MAIN_AUTO, SUB_MISSION, 0, 0, 0, 0))
+            finally:
+                self.mission_lock.release()
+        if action in ('hold', 'manual', 'rtl', 'land', 'emergency_stop', 'disarm'):
+            self.interrupted.set()
+        if action == 'rtl':
+            self._require_navigation(require_home=True)
+        if action == 'hold':
+            if not self.telemetry().get('position_hold_available'):
+                raise FlightControllerError('Position hold unavailable: waiting for a valid global position estimate')
+        if action == 'manual' and os.environ.get('GCS_MODE') == 'real' and not self.telemetry().get('rc_available'):
+            raise FlightControllerError('RC input unavailable or unverified; check receiver before takeover')
+        commands = {
+            'arm': ('MAV_CMD_COMPONENT_ARM_DISARM', (1, 0, 0, 0, 0, 0, 0)),
+            'disarm': ('MAV_CMD_COMPONENT_ARM_DISARM', (0, 0, 0, 0, 0, 0, 0)),
+            'emergency_stop': ('MAV_CMD_COMPONENT_ARM_DISARM', (0, 21196, 0, 0, 0, 0, 0)),
+            'hold': ('MAV_CMD_DO_SET_MODE', (1, MAIN_AUTO, SUB_LOITER, 0, 0, 0, 0)),
+            'manual': ('MAV_CMD_DO_SET_MODE', (1, TOGGLE_MANUAL_MAIN, 0, 0, 0, 0, 0)),
+            'rtl': ('MAV_CMD_DO_SET_MODE', (1, MAIN_AUTO, SUB_RTL, 0, 0, 0, 0)),
+            'land': ('MAV_CMD_DO_SET_MODE', (1, MAIN_AUTO, 6, 0, 0, 0, 0)),
+        }
+        if action not in commands: raise ValueError('Unknown flight action')
+        command, params = commands[action]
+        result = self.checked_command(command, params, emergency=action == 'emergency_stop')
+        if action == 'manual': result['mode_main'] = TOGGLE_MANUAL_MAIN
+        return result

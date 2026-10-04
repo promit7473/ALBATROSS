@@ -93,6 +93,39 @@ class TelemetryTests(unittest.TestCase):
         self.assertIsNone(result["hdg"])
         self.assertAlmostEqual(result["home_lon"], 91.813156)
 
+    def test_constant_position_estimator_never_enables_hold(self):
+        for flags, expected in ((16 | 32, True), (16 | 32 | 128, False),
+                ('ESTIMATOR_POS_HORIZ_ABS | ESTIMATOR_POS_VERT_ABS | ESTIMATOR_CONST_POS_MODE', False)):
+            self.get.return_value = {
+                'HEARTBEAT': heartbeat(),
+                'GLOBAL_POSITION_INT': record({'lat':223187250,'lon':918131560,
+                    'alt':10000,'relative_alt':5000,'hdg':0,'vx':0,'vy':0}),
+                'ESTIMATOR_STATUS': record({'flags':flags}),
+            }
+            self.assertEqual(self.fc.telemetry()['position_hold_available'], expected)
+
+    def test_sensor_health_requires_presence_and_freshness(self):
+        data={'SYS_STATUS':record({'onboard_control_sensors_health':1})}
+        rows={r['name']:r for r in fc.sensor_health(data)}
+        self.assertEqual(rows['Gyroscope']['state'],'unknown')
+        data['SYS_STATUS']=record({'onboard_control_sensors_present':1,
+            'onboard_control_sensors_enabled':1,'onboard_control_sensors_health':1})
+        self.assertEqual(fc.sensor_health(data)[0]['state'],'healthy')
+        data['SYS_STATUS']=record(data['SYS_STATUS']['message'],age=8)
+        self.assertEqual(fc.sensor_health(data)[0]['state'],'stale')
+
+    def test_sensor_diagnostics_identify_range_and_unknown_current(self):
+        data={'DISTANCE_SENSOR':record({'current_distance':22,'min_distance':1,
+            'max_distance':500,'signal_quality':100,'orientation':{'type':'MAV_SENSOR_ROTATION_PITCH_270'}}),
+            'BATTERY_STATUS':record({'current_battery':0})}
+        rows={r['name']:r for r in fc.sensor_health(data)}
+        self.assertEqual(rows['Downward range']['state'],'healthy')
+        self.assertIn('0.22 m',rows['Downward range']['detail'])
+        self.assertEqual(rows['Battery current']['state'],'unknown')
+        data['DISTANCE_SENSOR']['message']['current_distance']=600
+        rows={r['name']:r for r in fc.sensor_health(data)}
+        self.assertEqual(rows['Downward range']['state'],'warning')
+
     def test_unknown_timestamp_is_not_live(self):
         for value in (None, {}, {"status": {"time": {"last_update": "bad"}}}):
             self.assertFalse(fc._fresh(value))
@@ -151,7 +184,7 @@ class TelemetryTests(unittest.TestCase):
             result = self.fc.upload_mission([item])
         self.assertEqual(result, {"ok": True, "count": 1})
         types = [call.args[0]["type"] for call in self.post.call_args_list]
-        self.assertEqual(types, ["MISSION_COUNT", "MISSION_ITEM_INT", "MISSION_SET_CURRENT"])
+        self.assertEqual(types, ["MISSION_COUNT", "MISSION_ITEM_INT"])
 
     def test_aircraft_rejection_does_not_report_upload_success(self):
         self.get.return_value = heartbeat()
@@ -182,7 +215,7 @@ class CommandErrorTests(unittest.TestCase):
         handler.headers = {"Content-Length": str(len(payload))}
         handler.rfile = io.BytesIO(payload)
         handler._send = Mock()
-        with patch.object(server.FC, "arm", side_effect=fc.FlightControllerError("Link lost")):
+        with patch.object(server.FC, "execute", side_effect=fc.FlightControllerError("Link lost")):
             handler.do_POST()
         handler._send.assert_called_once_with(503, {"ok": False, "error": "Link lost"})
 

@@ -6,6 +6,7 @@
 set -u
 # self-locating project root (this script lives in <root>/launch)
 ROOT="${MARITIME_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+python3 "$ROOT/launch/session_preflight.py" 2 || exit 1
 GCS="$ROOT/gcs"
 PX4_DIR="$ROOT/external/PX4-Autopilot"
 M2R="$ROOT/external/mavlink2rest"

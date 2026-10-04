@@ -5,12 +5,17 @@ let BASE = { lat: 22.318725, lon: 91.813156 };
 let CAAB = { max_alt_ft: 200, max_alt_m: 60.96 };
 
 // ================= LIVE DRONE STATE (updated every tick) =================
+let homeMarker = null;
 let currentDroneLL = null;   // [lat, lon] from telemetry
 let droneIsArmed = false;
 let droneRelAlt = 0;
-let GCS_MODE = 'sitl';
-const modeReady = fetch('/api/mode').then(r => r.json()).then(m => {
-  GCS_MODE = (m && m.mode) || 'sitl';
+let GCS_MODE = 'unknown';
+const modeReady = fetch('/api/mode').then(r => {
+  if (!r.ok) throw new Error('Operating mode unavailable');
+  return r.json();
+}).then(m => {
+  if (!['sitl', 'real'].includes(m.mode)) throw new Error('Unknown operating mode');
+  GCS_MODE = m.mode;
   document.body.classList.toggle('mode-real', GCS_MODE === 'real');
   return GCS_MODE;
 }).catch(() => GCS_MODE);
@@ -26,7 +31,7 @@ function gpsHasFix(t) {
 
 function validLL(lat, lon) {
   return lat != null && lon != null && isFinite(lat) && isFinite(lon)
-    && Math.abs(lat) > 0.01 && Math.abs(lon) > 0.01
+    && !(lat === 0 && lon === 0)
     && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 }
 
@@ -61,7 +66,13 @@ function haversineKm(a, b) {
 function ringLatLngs(layer) { return (layer.getLatLngs()[0] || []).map(p => [p.lat, p.lng]); }
 
 // -------- operating boundary (editable) --------
-let opLayer = null, kmlOperating = null;
+let opLayer = null, kmlOperating = null, boundaryDirty = false;
+function boundaryChanged() {
+  boundaryDirty = true;
+  clearRoute();
+  updateAreaInfo();
+  $('mission-info').textContent = 'Boundary changed — save it before planning.';
+}
 const OP_STYLE = { color:'#34d399', weight:2.5, fill:true, fillColor:'#34d399', fillOpacity:0.07, dashArray:'6 4' };
 function updateAreaInfo() {
   if (!opLayer) { $('area-info').textContent = 'no boundary set'; return; }
@@ -71,15 +82,15 @@ function updateAreaInfo() {
 function makeOpLayer(latlngs) {
   if (opLayer) opLayer.remove();
   opLayer = L.polygon(latlngs, OP_STYLE).addTo(map);
-  opLayer.on('pm:edit pm:dragend pm:markerdragend', updateAreaInfo);
+  opLayer.on('pm:edit pm:dragend pm:markerdragend', boundaryChanged);
   opLayer.on('click', e => { if (addMode) { addWaypoint(e.latlng); L.DomEvent.stopPropagation(e); } });
   updateAreaInfo(); return opLayer;
 }
 
 fetch('/api/kml').then(r => r.json()).then(g => {
   if (g.base) {
-    BASE = g.base;
-    L.circleMarker([g.base.lat, g.base.lon], { radius:6, color:'#0ea5e9', fillColor:'#38bdf8', fillOpacity:1, weight:2 })
+    if (BASE.name !== 'Home') BASE = g.base;
+    homeMarker = L.circleMarker([BASE.lat, BASE.lon], { radius:6, color:'#0ea5e9', fillColor:'#38bdf8', fillOpacity:1, weight:2 })
       .addTo(map).bindTooltip(g.base.name);
   }
   g.features.forEach(f => {
@@ -123,22 +134,32 @@ map.pm.setPathOptions(OP_STYLE);
 $('btn-draw').onclick = () => { if (opLayer && opLayer.pm) opLayer.pm.disable(); setActive('btn-edit', false);
   map.pm.enableDraw('Polygon', { finishOn:'dblclick' }); setActive('btn-draw', true); };
 map.on('pm:create', e => { map.pm.disableDraw(); setActive('btn-draw', false);
-  const ll = ringLatLngs(e.layer); e.layer.remove(); makeOpLayer(ll); });
+  const ll = ringLatLngs(e.layer); e.layer.remove(); makeOpLayer(ll); boundaryChanged(); });
 $('btn-edit').onclick = () => { if (!opLayer) return;
   const on = !(opLayer.pm && opLayer.pm.enabled());
   if (on) opLayer.pm.enable({ draggable:true, snappable:true }); else opLayer.pm.disable();
   setActive('btn-edit', on); };
-$('btn-clear').onclick = () => { if (opLayer) { opLayer.remove(); opLayer = null; } setActive('btn-edit', false); updateAreaInfo(); };
-$('btn-save').onclick = () => {
+$('btn-clear').onclick = () => {
+  if (opLayer) { opLayer.remove(); opLayer = null; }
+  if (kmlOperating) makeOpLayer(kmlOperating);
+  setActive('btn-edit', false); boundaryChanged();
+};
+$('btn-save').onclick = async () => {
   const poly = opLayer ? ringLatLngs(opLayer) : null;
-  fetch('/api/operating_area', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({polygon: poly}) })
-    .then(r => r.json()).then(res => { const b = $('btn-save'), old = b.textContent;
-      b.textContent = res.ok ? `✓ saved (${res.points})` : '✗ error'; setTimeout(() => b.textContent = old, 1600); });
+  const revision = routeRevision;
+  $('btn-save').disabled = true;
+  try {
+    await apiPost('/api/operating_area', { polygon: poly });
+    if (revision === routeRevision) boundaryDirty = false;
+    $('mission-info').textContent = boundaryDirty ? 'Boundary changed during save — save again.' : 'Boundary saved — plan a new route.';
+  } catch (e) { $('mission-info').textContent = 'Save failed: ' + e.message; }
+  finally { $('btn-save').disabled = false; }
 };
 
 // -------- multi-waypoint mission (each waypoint has its own height) --------
 let waypoints = [];        // [{ ll:[lat,lon], alt, marker }]
 let routeLL = null, routeLine = null, addMode = false;
+let routeRevision = 0;
 
 function wpAlt() { return Math.max(5, Math.min(CAAB.max_alt_m, Math.round(+$('alt').value || 45))); }
 function numberIcon(n) {
@@ -148,7 +169,13 @@ function numberIcon(n) {
       border:2px solid #e0f2ff;box-shadow:0 1px 4px rgba(0,0,0,.6)">${n}</div>` });
 }
 function renumber() { waypoints.forEach((w,i) => w.marker.setIcon(numberIcon(i+1))); }
-function clearRoute() { if (routeLine) { routeLine.remove(); routeLine = null; } routeLL = null; }
+function clearRoute() {
+  routeRevision++;
+  if (window.workspaceRouteChanged) window.workspaceRouteChanged();
+  if (routeLine) { routeLine.remove(); routeLine = null; }
+  routeLL = null;
+  sync3DRoute();
+}
 function refreshWpList() {
   const box = $('wp-list');
   if (!waypoints.length) { box.innerHTML = '<div class="wp-empty">no waypoints — click ➕ then click the map</div>'; return; }
@@ -156,9 +183,12 @@ function refreshWpList() {
   waypoints.forEach((w, i) => {
     const row = document.createElement('div'); row.className = 'wp-row';
     row.innerHTML = `<span class="wp-n">${i+1}</span>
-      <input class="wp-alt" type="number" min="5" max="200" value="${w.alt}" /> m
+      <input class="wp-alt" type="number" min="5" max="${Math.floor(CAAB.max_alt_m)}" value="${w.alt}" /> m
       <span class="wp-del" title="remove">✕</span>`;
-    row.querySelector('.wp-alt').onchange = e => { w.alt = Math.max(5, Math.min(200, +e.target.value || w.alt)); clearRoute(); };
+    row.querySelector('.wp-alt').onchange = e => {
+      w.alt = Math.max(5, Math.min(Math.floor(CAAB.max_alt_m), Math.round(+e.target.value || w.alt)));
+      e.target.value = w.alt; clearRoute();
+    };
     row.querySelector('.wp-del').onclick = () => { w.marker.remove(); waypoints.splice(i,1); renumber(); refreshWpList(); clearRoute(); };
     box.appendChild(row);
   });
@@ -190,6 +220,7 @@ function sitlHome() {
   return { lat: +ll[0].toFixed(7), lon: +ll[1].toFixed(7) };
 }
 async function startSim(kind) {
+  if (await modeReady !== 'sitl') throw new Error('Simulator controls require SITL mode.');
   const home = sitlHome();
   $('mission-info').innerHTML = kind === 'manual'
     ? `⏳ <b>Manual sim</b> at ${home.lat.toFixed(5)}, ${home.lon.toFixed(5)} — RC flies Gazebo, real props stay off (≈15s)…`
@@ -217,7 +248,7 @@ $('btn-sitl-start').onclick = async () => {
 $('btn-sitl-stop').onclick = async () => {
   $('mission-info').textContent = 'Stopping SITL simulator...';
   try {
-    await fetch('/api/sitl/stop', { method: 'POST' });
+    await apiPost('/api/sitl/stop', {});
     $('mission-info').textContent = '⏹ SITL simulator stopped';
   } catch(e) {
     $('mission-info').textContent = 'Stop error: ' + e.message;
@@ -226,6 +257,8 @@ $('btn-sitl-stop').onclick = async () => {
 
 // -------- PLAN: exclusion-aware route through all waypoints --------
 $('btn-plan').onclick = async () => {
+  if (boundaryDirty) { $('mission-info').textContent = 'Save the edited boundary before planning.'; return; }
+  if (await modeReady === 'unknown') { $('mission-info').textContent = 'Operating mode unavailable — reload before planning.'; return; }
   if (!waypoints.length) { $('mission-info').innerHTML = '⚠️ Add at least one waypoint (➕ then click the map)'; return; }
   const isAirborne = droneIsArmed && droneRelAlt > 2.0;
   if (GCS_MODE === 'real' && !currentDroneLL) {
@@ -234,14 +267,19 @@ $('btn-plan').onclick = async () => {
   }
   const start = ((isAirborne || GCS_MODE === 'real') && currentDroneLL) ? currentDroneLL : [BASE.lat, BASE.lon];
   const wps = waypoints.map(w => ({ lat: w.ll[0], lon: w.ll[1], alt: w.alt }));
+  clearRoute();
+  const revision = routeRevision;
+  $('btn-plan').disabled = true;
   $('mission-info').textContent = 'Planning exclusion-aware route…';
   try {
     const r = await (await fetch('/api/plan_multi', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ start, waypoints: wps, alt: wpAlt() }) })).json();
+    if (revision !== routeRevision) return;
     if (!r.ok) { $('mission-info').textContent = 'Plan failed: ' + r.error; return; }
     routeLL = r.route;                                   // [[lat,lon,alt],...]
     if (routeLine) routeLine.remove();
     routeLine = L.polyline(routeLL.map(p => [p[0], p[1]]), { color:'#38bdf8', weight:3, dashArray:'4 6' }).addTo(map);
+    sync3DRoute();
     let msg = `✓ Route planned (<b>${routeLL.length}</b> legs)`;
     if (r.clamped && r.clamped.length) {
       msg += ` · <span style="color:#fbbf24;">⚠️ WP ${r.clamped.map(i=>i+1).join(', ')} in a no-fly zone → routed to the safe edge (won't enter)</span>`;
@@ -249,7 +287,7 @@ $('btn-plan').onclick = async () => {
     $('mission-info').innerHTML = msg + ' · Click <b>Upload mission</b>';
   } catch(e) {
     $('mission-info').textContent = 'Plan error: ' + e.message;
-  }
+  } finally { $('btn-plan').disabled = false; }
 };
 
 // -------- UPLOAD: per-waypoint heights + adjustable auto-RTL altitude --------
@@ -259,21 +297,30 @@ $('btn-upload').onclick = async () => {
   const rtl = $('chk-rtl').checked;
   const rtlAlt = Math.max(10, Math.min(CAAB.max_alt_m, +$('rtl-alt').value || 60));
   const isAirborne = droneIsArmed && droneRelAlt > 2.0;
+  const uploadedRevision = routeRevision;
+  $('btn-upload').disabled = true;
   try {
     const r = await (await fetch('/api/mission/upload', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ route: routeLL, alt: wpAlt(), rtl, rtl_alt: rtlAlt, is_airborne: isAirborne, hold_s: 15.0, home_lat: BASE.lat, home_lon: BASE.lon }) })).json();
     if (r.ok) {
+      if (window.workspaceMissionUploaded) window.workspaceMissionUploaded(r, uploadedRevision);
       const cap = r.alt_capped_to_m ? ` · <span style="color:#f59e0b;">⚠️ altitude capped to CAAB ${Math.floor(r.alt_capped_to_m)} m</span>` : '';
-      $('mission-info').innerHTML = `✓ Mission uploaded (<b>${r.count}</b> items · RTL ${rtl ? ('@ '+Math.round(rtlAlt)+' m') : 'off'})${cap} · Click <b>Arm</b> then <b>Start</b>`;
+      $('mission-info').innerHTML = `✓ Mission uploaded${r.verified ? " and read back" : ""} (<b>${r.count}</b> items · RTL ${rtl ? ('@ '+Math.round(rtlAlt)+' m') : 'off'})${cap} · Click <b>Arm</b> then <b>Start</b>`;
     } else {
       $('mission-info').innerHTML = `<span style="color:#ef4444;">⚠️ Upload failed (${r.error}). Is SITL running?</span>`;
     }
   } catch(e) {
     $('mission-info').innerHTML = `<span style="color:#ef4444;">⚠️ Connection error: ${e.message}</span>`;
-  }
+  } finally { $('btn-upload').disabled = false; }
 };
 
 // -------- command helper --------
+async function apiPost(path, payload) {
+  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Request failed');
+  return result;
+}
 async function cmdPost(payload) {
   const response = await fetch('/api/command', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
   const result = await response.clone().json();
@@ -314,6 +361,7 @@ if ($('btn-mode-plan')) {
 }
 
 $('btn-arm').onclick = () => {
+  if (GCS_MODE === 'unknown') { $('mission-info').textContent = 'Operating mode unavailable — reload before arming.'; return; }
   if (GCS_MODE === 'real' && !droneIsArmed && !confirm('Arm the real aircraft? Motors may spin.')) return;
   sendFlightCommand('btn-arm', droneIsArmed ? 'disarm' : 'arm', droneIsArmed ? 'Disarm request sent' : 'Arm request sent');
 };
@@ -343,8 +391,7 @@ function refreshToggleBtn(mainMode) {
 
 $('btn-stop-mission').onclick = async () => {
   if (!await sendFlightCommand('btn-stop-mission', 'stop_mission', 'Hold and clear mission requests sent')) return;
-  if (routeLine) { routeLine.remove(); routeLine = null; }
-  routeLL = null;
+  clearRoute();
 };
 $('btn-drop').onclick = () => {
   if (confirm('Deploy SAR Cargo / Buoy Release Mechanism?')) {
@@ -772,6 +819,8 @@ function init3D() {
     loadAreaBuildings(ll);
     initGpsConstellation();
   } catch (e) {
+    if (viewer) { viewer.destroy(); viewer = null; }
+    cesReady = false;
     console.error('Cesium init failed', e);
     $('mission-info').innerHTML = `<span style="color:#ef4444;">⚠️ 3D view failed: ${e.message}</span>`;
     return;
@@ -817,6 +866,18 @@ function toggle3DFollow(force) {
   }
 }
 
+function sync3DRoute() {
+  if (!viewer) return;
+  if (cesRoute) { viewer.entities.remove(cesRoute); cesRoute = null; }
+  if (routeLL && viewer) {
+    const dalt = +$('alt').value || 45;
+    const heights = routeLL.flatMap(p => [p[1], p[0], (p[2] != null ? p[2] : dalt)]);
+    cesRoute = viewer.entities.add({ polyline: {
+      positions: heights.length ? Cesium.Cartesian3.fromDegreesArrayHeights(heights) : [],
+      width: 4, material: Cesium.Color.fromCssColorString('#38bdf8'), clampToGround: false } });
+  }
+}
+
 $('btn-3d-follow').onclick = () => toggle3DFollow();
 
 $('btn-3d').onclick = () => {
@@ -827,16 +888,15 @@ $('btn-3d').onclick = () => {
   $('btn-3d').classList.toggle('active', on);
   document.body.classList.toggle('cesium-on', on);
   if (!on) { toggle3DFollow(false); cesGpsView = false; return; }
-  init3D();
-  setTimeout(() => { if (viewer) viewer.resize(); }, 120);
-  if (routeLL && viewer) {
-    if (cesRoute) viewer.entities.remove(cesRoute);
-    const dalt = +$('alt').value || 45;
-    const heights = routeLL.flatMap(p => [p[1], p[0], (p[2] != null ? p[2] : dalt)]);
-    cesRoute = viewer.entities.add({ polyline: {
-      positions: heights.length ? Cesium.Cartesian3.fromDegreesArrayHeights(heights) : [],
-      width: 4, material: Cesium.Color.fromCssColorString('#38bdf8'), clampToGround: false } });
+  if (!window.Cesium) {
+    $('btn-2d').click();
+    $('mission-info').textContent = '3D library unavailable — check the internet connection and reload.';
+    return;
   }
+  init3D();
+  if (!cesReady) { $('btn-2d').click(); return; }
+  setTimeout(() => { if (viewer) viewer.resize(); }, 120);
+  sync3DRoute();
 };
 $('btn-2d').onclick = () => {
   $('cesiumContainer').classList.remove('on');
@@ -883,9 +943,7 @@ modeReady.then(mode => {
     if (btn && !btn.classList.contains('active')) btn.click();
     locateOperator();
     setModeBtn('btn-mode-twin');
-    setTimeout(() => {
-      if ($('btn-3d') && !$('btn-3d').classList.contains('active')) $('btn-3d').click();
-    }, 800);
+
   }
 });
 
@@ -944,12 +1002,44 @@ if ($('btn-locate')) {
 // -------- inline camera feeds (chase + fpv) --------
 function makeCamToggle(btnId, imgId, url, onStart) {
   const btn = $(btnId), img = $(imgId);
+  const empty = $(imgId + '-empty'), state = $(imgId + '-state');
+  let waitingTimer;
+  img.alt = ''; // The adjacent status supplies the accessible empty-state text.
+  function showState(message) {
+    img.style.visibility = 'hidden';
+    empty.hidden = false;
+    state.textContent = message;
+    empty.querySelector('span').textContent = message === 'Stream unavailable'
+      ? 'Check the camera connection, then Stop and Start to retry.'
+      : message === 'Stream stopped' ? 'Use Start in the toolbar to connect.' : 'Waiting for frames from the camera.';
+  }
+  showState('Stream stopped');
+  img.addEventListener('load', () => {
+    if (!btn.classList.contains('active')) return;
+    clearTimeout(waitingTimer);
+    img.style.visibility = 'visible';
+    empty.hidden = true;
+  });
+  img.addEventListener('error', () => {
+    clearTimeout(waitingTimer);
+    if (btn.classList.contains('active')) showState('Stream unavailable');
+  });
   btn.onclick = () => {
     const on = !btn.classList.contains('active');
+    clearTimeout(waitingTimer);
     btn.classList.toggle('active', on);
-    btn.textContent = on ? '⏸ stop' : '▶ start';
-    if (on && onStart) onStart();
-    img.src = on ? (url + '?' + Date.now()) : '';
+    btn.setAttribute('aria-pressed', String(on));
+    btn.textContent = on ? '■ Stop' : '▶ Start';
+    showState(on ? 'Connecting to camera…' : 'Stream stopped');
+    if (on) {
+      if (onStart) Promise.resolve(onStart()).catch(() => {});
+      // MJPEG can render frames before firing load (the response stays open).
+      img.style.visibility = 'visible';
+      img.src = url + '?' + Date.now();
+      waitingTimer = setTimeout(() => {
+        if (!empty.hidden) state.textContent = 'Waiting for video…';
+      }, 8000);
+    } else img.removeAttribute('src');
   };
 }
 makeCamToggle('btn-feed', 'feed-img', '/video.mjpeg',
@@ -978,7 +1068,7 @@ $('btn-camera-fullscreen').onclick = async () => {
   }
 };
 document.addEventListener('fullscreenchange', () => {
-  $('btn-camera-fullscreen').textContent = document.fullscreenElement ? 'Exit ⛶' : '⛶';
+  $('workspace-fullscreen').textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen';
 });
 
 // Camera health is independent of the MAVLink telemetry connection.
@@ -1008,6 +1098,7 @@ async function pollFrontCamera() {
           : 'Camera bridge unavailable — reconnecting…';
       }
       if (camera.bridge_connected && fpvStreamError && $('btn-feed2').classList.contains('active')) {
+        $('feed2-img').style.visibility = 'visible';
         $('feed2-img').src = '/video2.mjpeg?' + Date.now();
       }
     } catch (e) {
@@ -1040,7 +1131,7 @@ modeReady.then(mode => { if (mode === 'real') pollFrontCamera(); });
 
 // ?feeds=on -> auto-start both camera feeds (handy for demos/screenshots)
 if (new URLSearchParams(location.search).get('feeds') === 'on') {
-  ['btn-feed', 'btn-feed2'].forEach(id => { const b = $(id); if (b && !b.classList.contains('active')) b.click(); });
+  modeReady.then(mode => (mode === 'real' ? ['btn-feed2'] : ['btn-feed', 'btn-feed2']).forEach(id => { const b = $(id); if (b && !b.classList.contains('active')) b.click(); }));
 }
 
 // ================= TELEMETRY =================
@@ -1116,6 +1207,7 @@ async function tick() {
   const H = t.connected ? aircraftHeading(t) : null;
   $('mode').textContent  = (t.custom_mode!=null) ? modeName(t.custom_mode) : '—';
   if (t.custom_mode != null) refreshToggleBtn((t.custom_mode >>> 16) & 0xff);   // sync toggle label w/ live PX4 mode
+  $('btn-arm').textContent = t.armed ? '🔒 Disarm' : '🔓 Arm';
   $('armed').textContent = (t.armed==null)?'—':(t.armed?'ARMED':'disarmed'); $('armed').style.color = t.armed?'#7ff0ac':'#ff9c9c';
   $('relalt').textContent = (t.rel_alt!=null)?t.rel_alt.toFixed(1)+' m':'—';
   $('gspd').textContent   = (t.groundspeed!=null)?t.groundspeed.toFixed(1)+' m/s':'—';
@@ -1135,13 +1227,16 @@ async function tick() {
 
   // ---- orientation compass (body heading, clockwise from north) ----
   if (H != null) {
+    $('cmp-needle').setAttribute('visibility', 'visible');
     $('cmp-needle').setAttribute('transform', `rotate(${H} 60 60)`);
     $('cmp-hdg').textContent = Math.round(H) + '°';
   } else {
+    $('cmp-needle').setAttribute('visibility', 'hidden');
     $('cmp-hdg').textContent = '—';
   }
 
   // ---- attitude indicator (roll + pitch, artificial horizon) ----
+  $('adi-move').setAttribute('opacity', t.roll != null && t.pitch != null ? '1' : '0.2');
   if (t.roll != null && t.pitch != null) {
     const px = Math.max(-40, Math.min(40, t.pitch)) * 1.1;   // px offset per degree
     $('adi-move').setAttribute('transform', `rotate(${-t.roll} 50 50) translate(0 ${px})`);
@@ -1154,6 +1249,8 @@ async function tick() {
 
   // ---- flight status panel ----
   updateStatus(t);
+
+  if (window.workspaceTelemetry) window.workspaceTelemetry(t);
 
   // ---- UPDATE GLOBAL DRONE STATE ----
   // Real PX4 keeps publishing lat/lon with fix NO_GPS. Those numbers wander
@@ -1168,8 +1265,7 @@ async function tick() {
   if (droneMarker) droneMarker.setOpacity(hasPos ? 1 : 0.35);
   if (validLL(t.home_lat, t.home_lon)) {
     BASE = { name: 'Home', lat: t.home_lat, lon: t.home_lon };
-  } else if (hasPos && GCS_MODE === 'real' && BASE.name !== 'Home') {
-    BASE = { name: 'Home', lat: t.lat, lon: t.lon };
+    if (homeMarker) homeMarker.setLatLng([BASE.lat, BASE.lon]).bindTooltip('Aircraft home');
   }
   droneIsArmed = !!t.armed;
   droneRelAlt = (t.rel_alt != null) ? t.rel_alt : 0;

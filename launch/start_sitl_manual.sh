@@ -19,7 +19,9 @@
 #   LAUNCH_QGC       1 = also launch QGC (default 1; it connects to the SITL on
 #                    :14550, NOT the real Pixhawk — the RC bridge owns /dev/ttyACM0)
 set +u
+export GCS_MODE=sitl
 ROOT="${MARITIME_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+python3 "$ROOT/launch/session_preflight.py" 2 || exit 1
 source /opt/ros/humble/setup.bash 2>/dev/null
 source "$ROOT/external/PX4-Autopilot/Tools/simulation/gz/setup.sh" 2>/dev/null
 cd "$ROOT/gcs" || exit 2
@@ -28,7 +30,6 @@ cd "$ROOT/gcs" || exit 2
 pkill -f "gcs/server.py" 2>/dev/null
 pkill -f "rc_to_sitl.py" 2>/dev/null
 pkill -KILL -f "gz sim" 2>/dev/null; pkill -KILL -f "bin/px4" 2>/dev/null
-pkill -f "ruby" 2>/dev/null
 pkill -f "cam_bridge.py" 2>/dev/null; pkill -f "chase_cam.py" 2>/dev/null
 pkill -f "mavlink2rest" 2>/dev/null
 sleep 2

@@ -25,6 +25,25 @@ The browser's **Aircraft 3D** is a Cesium view of MAVLink position and attitude.
 Gazebo is the separate SITL simulator. Missing telemetry/GPS hides the browser's
 aircraft model rather than placing it at the map center.
 
+The docked workspace now provides **Read aircraft mission / QGC changes** in the
+Mission drawer. This reads stored navigation items into an amber, read-only map
+preview; it does not replace the blue local draft. Web uploads are read back and
+compared before verification. GO and Resume recheck the stored items and require
+separate arming. The adapter uses GCS identity `246/190`, distinct from QGC;
+aircraft targeting is still fixed at `1/1`.
+
+Mission replies are filtered by recipient and mission type. Web mission transfers
+are serialized, and supported aircraft mission-ID changes invalidate verification.
+QGC remains an independent writer: coordinate uploads between the two applications.
+Do not interpret shared telemetry as synchronized draft editors. QGC automatic
+restart-based refresh has been removed in both real and SITL modes.
+
+Floating flight actions wait for an addressed matching command acknowledgement,
+then the UI waits for the requested telemetry state. Acceptance does not prove
+completion. RC availability comes from fresh RC_CHANNELS; Hover conservatively
+requires global position/altitude and supported estimator flags. Physical RC,
+hover, failsafe and emergency motor-stop behavior still require SITL/hardware tests.
+
 The following sections describe the simulator and alternate MAVROS USB setup.
 
 QGC runs **alongside** the web GCS, not instead of it, and needs **zero manual
@@ -95,9 +114,9 @@ QGC starts automatically at the end of that script.
 | Port  | Used by                                    | Scenario     |
 |-------|--------------------------------------------|--------------|
 | 14550 | QGroundControl (PX4 default link / MAVROS) | both         |
-| 14555 | mavlink2rest input (web GCS)               | SITL         |
+| 14555 | mavlink2rest input (web GCS)               | both         |
 | 14556 | PX4 local socket for the web-GCS push link | SITL         |
-| 8088  | mavlink2rest REST API                      | SITL         |
+| 8088  | mavlink2rest REST API                      | both         |
 | 8080  | web GCS server                             | both         |
 
 ## Troubleshooting
