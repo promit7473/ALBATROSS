@@ -1,0 +1,54 @@
+# Parameters for the tracking stack (sections are node names).
+
+perception:
+  ros__parameters:
+    weights: ""                  # "" -> <ws>/assets/weights/yolo11s.pt  (yolo11n.pt: 2x faster on CPU,
+                                 #    but misses small top-down people)
+    imgsz: 640                   # on a GPU, 960 detects distant people noticeably better
+    device: auto                 # auto = cuda:0 if available, else cpu
+    threads: 4                   # CPU threads for inference (leave some for Gazebo)
+    classes: [person, car, truck, bus, motorcycle, bicycle]
+    lockable_classes: [person]
+    det_conf: 0.10               # low on purpose: weak detections keep tracks alive (ByteTrack stage 2)
+    high_thresh: 0.35
+    new_track_thresh: 0.40
+    min_hits: 2                  # consecutive matches before a new track is confirmed
+    max_lost_frames: 45
+    reid_max_distance: 0.35      # appearance gate (Bhattacharyya) for re-identification
+    reid_max_lost_time: 20.0     # [s] give up the lock after this long unseen
+
+follow:
+  ros__parameters:
+    altitude: 10.0               # [m] above ground
+    distance: 0.0                # [m] horizontal stand-off; 0 = auto (keeps the target centred)
+    mode: behind                 # behind | hold_bearing | orbit
+    orbit_rate_deg: 10.0
+    bearing_rate_deg: 15.0       # how fast 'behind' mode swings round a turning target
+    # Camera mount -- must match src/tracker_sim/models/x500_tracker/model.sdf
+    camera_pitch_deg: 40.0
+    camera_hfov: 1.2
+    camera_offset: [0.12, 0.0, 0.20]
+    target_centre_height: 0.9
+    # Guidance gains / limits
+    kp_xy: 0.8
+    ki_xy: 0.05
+    kp_z: 0.8
+    kp_yaw: 1.5
+    v_max_xy: 10.0
+    v_max_z: 2.0
+    a_max_xy: 3.0
+    yaw_rate_max_deg: 60.0
+    min_altitude: 3.0
+    geofence_radius: 160.0       # [m] around home
+    coast_time: 3.0              # [s] keep following the prediction after losing sight
+    search_yaw_rate_deg: 25.0
+    target_accel_std: 1.5
+    setpoint_rate: 20.0
+    # Applied to PX4 once on connection (SITL without RC / GCS). Remove for real hardware.
+    px4_params:
+      - COM_RC_IN_MODE=4
+      - NAV_RCL_ACT=0
+      - NAV_DLL_ACT=0
+      - COM_RCL_EXCEPT=4
+      - CBRK_SUPPLY_CHK=894281
+      - COM_OF_LOSS_T=1.0

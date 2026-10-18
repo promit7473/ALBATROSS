@@ -1,0 +1,186 @@
+# City layout: single source of truth for the generated world (tools/build_world.py)
+# and for the moving traffic (traffic_node). Units: metres / degrees, ENU (x east, y north).
+#
+# The city is a 2x2 grid of blocks bounded by roads at x,y in {-100, 0, +100}:
+#   NW: residential      NE: park / plaza (main tracking arena, drone home)
+#   SW: civic buildings  SE: commercial + parking lot
+
+world_name: city
+seed: 7
+ground_size: 340
+
+# Drone spawn (x, y, yaw_deg). Grass lawn in the park, away from walking paths.
+drone_spawn: [22.0, 26.0, 45.0]
+
+# Flat visual-only surfaces drawn on the ground: [cx, cy, sx, sy, colour, layer]
+# (layer = draw order; a higher layer sits a few mm above lower ones).
+surfaces:
+  # roads (12 m wide, two lanes)
+  - [0, 0, 224, 12, asphalt, 1]
+  - [0, 0, 12, 224, asphalt, 1]
+  - [0, 100, 224, 12, asphalt, 1]
+  - [0, -100, 224, 12, asphalt, 1]
+  - [100, 0, 12, 224, asphalt, 1]
+  - [-100, 0, 12, 224, asphalt, 1]
+  # park plaza + walking paths (NE block)
+  - [50, 50, 26, 26, paving, 2]
+  - [50, 50, 3, 82, paving, 2]
+  - [50, 50, 82, 3, paving, 2]
+  # commercial parking lot + gas station forecourt (SE block)
+  - [64, -44, 46, 18, asphalt_light, 2]
+  - [28, -32, 24, 16, asphalt_light, 2]
+  # school yard (SW block)
+  - [-50, -50, 34, 14, paving, 2]
+
+# Sidewalks: 3 m paving ring just inside every block edge.
+sidewalk_width: 3.0
+blocks:            # [xmin, ymin, xmax, ymax] of each block's interior (road edge to road edge)
+  - [6, 6, 94, 94]
+  - [-94, 6, -6, 94]
+  - [6, -94, 94, -6]
+  - [-94, -94, -6, -6]
+
+# Static models from assets/models: [model, x, y, yaw_deg]
+buildings:
+  # NW residential
+  - [house_1, -26, 24, 0]
+  - [house_2, -50, 22, 0]
+  - [house_3, -73, 22, 0]
+  - [house_3, -24, 52, 90]
+  - [house_2, -24, 78, 90]
+  - [apartment, -62, 64, 0]
+  # SE commercial
+  - [gas_station, 28, -40, 0]
+  - [fast_food, 64, -22, 180]
+  - [grocery_store, 62, -72, 0]
+  # SW civic
+  - [police_station, -24, -26, 0]
+  - [fire_station, -56, -20, 180]
+  - [office_building, -81, -25, 0]
+  - [school, -50, -72, 0]
+  - [law_office, -20, -58, 90]
+  - [salon, -20, -78, 90]
+  - [thrift_shop, -82, -58, -90]
+  - [post_office, -82, -80, -90]
+
+props:
+  - [fountain, 50, 50, 0]
+  - [bus_stop, 30, 10.5, 180]
+  - [bus_stop, -40, -10.5, 0]
+  - [stop_sign, 8, 8, 0]
+  - [stop_sign, -8, -8, 180]
+  - [stop_sign, 8, -8, 90]
+  - [stop_sign, -8, 8, -90]
+  - [fire_hydrant, 15, 8, 0]
+  - [fire_hydrant, -35, 8, 0]
+  - [fire_hydrant, 8, -55, 0]
+  - [mailbox, -40, 9, 0]
+  - [postbox, -76, -74, 0]
+  - [speed_limit_sign, 80, -8, 90]
+  - [dumpster, 76, -60, 0]
+  - [dumpster, -36, -38, 90]
+  - [jersey_barrier, 60, 117, 0]
+  - [jersey_barrier, 65, 117, 0]
+  - [construction_cone, 56, 115, 0]
+  - [construction_cone, 69, 115, 0]
+  - [construction_barrel, 62, 114, 0]
+  - [person_standing, 41, 53, 30]
+  - [person_standing, 57, 44, 200]
+  - [person_standing, 31, 8, 180]
+
+# Props repeated along a line: [model, x0, y0, x1, y1, spacing]
+# (points that fall on a road are skipped)
+rows:
+  - [lamp_post, -90, 7.5, 90, 7.5, 30]
+  - [lamp_post, -75, -7.5, 75, -7.5, 30]
+  - [lamp_post, 7.5, 20, 7.5, 90, 35]
+  - [lamp_post, -7.5, -90, -7.5, -20, 35]
+  - [pine_tree, -130, 125, 130, 125, 18]
+  - [pine_tree, -130, -125, 130, -125, 18]
+  - [oak_tree, 125, -110, 125, 110, 22]
+  - [oak_tree, -125, -110, -125, 110, 22]
+
+# Trees scattered at random (seeded) inside a region, outside the keep-out boxes
+# [xmin, ymin, xmax, ymax] -- paths, the plaza, buildings and the drone pad.
+scatter:
+  - {model: oak_tree, count: 14, region: [16, 16, 84, 84], min_gap: 9,
+     keep_out: [[45, 9, 55, 91], [9, 45, 91, 55], [34, 34, 66, 66], [14, 18, 30, 34]]}
+  - {model: pine_tree, count: 6, region: [-88, 44, -34, 88], min_gap: 8,
+     keep_out: [[-74, 51, -50, 77], [-30, 43, -18, 84]]}
+
+# Parked (static) vehicles: [model, x, y, yaw_deg]
+parked:
+  - [hatchback_red, 47, -40, 90]
+  - [suv, 52, -40, 90]
+  - [prius_hybrid, 61, -40, 90]
+  - [hatchback, 70, -40, 90]
+  - [pickup, 79, -40, 90]
+  - [hatchback_blue, 50, -48, -90]
+  - [suv, 64, -48, -90]
+  - [hatchback, 73, -48, -90]
+  - [prius_hybrid, 84, -48, -90]
+  - [hatchback_blue, -40, 12, 0]
+  - [pickup, -64, 12, 0]
+  - [ambulance, -12, -40, 0]
+  - [fire_truck, -56, -32, 90]
+
+# Mesh nose direction differs per model: yaw added so heading 0 = driving +x.
+vehicle_heading_offset: {prius_hybrid: 90, ambulance: 90, fire_truck: 90}
+
+# Moving traffic. Routes are closed loops on the right-hand lane (lanes sit 3 m
+# off the road centre line). Corners are rounded with `corner_radius`.
+traffic:
+  corner_radius: 7.0
+  rate_hz: 30.0
+  intersection_radius: 9.0       # cars yield inside a junction box of this radius
+  routes:
+    ne_block: [[-3, -3], [103, -3], [103, 103], [-3, 103]]
+    sw_block: [[-103, -103], [3, -103], [3, 3], [-103, 3]]
+    outer_cw: [[-97, 97], [97, 97], [97, -97], [-97, -97]]
+  vehicles:                      # [model, route, speed_mps, start_fraction]
+    - [suv, ne_block, 8.0, 0.0]
+    - [hatchback_blue, ne_block, 7.0, 0.35]
+    - [prius_hybrid, ne_block, 6.5, 0.7]
+    - [pickup, sw_block, 8.0, 0.1]
+    - [hatchback_red, sw_block, 7.5, 0.55]
+    - [ambulance, outer_cw, 9.0, 0.2]
+    - [hatchback, outer_cw, 8.0, 0.6]
+
+# People (animated actors). Clothing colours are drawn from the palettes below so
+# every person looks different -- which also gives the re-identifier something
+# to work with.
+people:
+  palette:
+    shirt: [[0.75, 0.08, 0.08], [0.95, 0.95, 0.95], [0.08, 0.08, 0.08], [0.95, 0.75, 0.10],
+            [0.10, 0.30, 0.75], [0.85, 0.40, 0.05], [0.45, 0.10, 0.55], [0.10, 0.55, 0.30],
+            [0.60, 0.60, 0.62], [0.95, 0.45, 0.65]]
+    pants: [[0.06, 0.09, 0.35], [0.12, 0.12, 0.12], [0.35, 0.30, 0.22], [0.50, 0.50, 0.52],
+            [0.20, 0.25, 0.15]]
+    skin:  [[0.80, 0.55, 0.39], [0.55, 0.36, 0.24], [0.35, 0.22, 0.14], [0.92, 0.72, 0.58]]
+
+  # Fixed routes. mode: loop (closed polygon) | pingpong (walk to the end and back)
+  walkers:
+    - {anim: walk, speed: 1.3, mode: pingpong, path: [[-85, 8], [85, 8]]}
+    - {anim: walk, speed: 1.2, mode: pingpong, path: [[85, -8], [-85, -8]]}
+    - {anim: walk, speed: 1.4, mode: pingpong, path: [[8, -85], [8, 85]]}
+    - {anim: walk, speed: 1.1, mode: loop, path: [[8, 8], [92, 8], [92, 92], [8, 92]]}
+    - {anim: walk, speed: 1.3, mode: loop, path: [[-8, -8], [-92, -8], [-92, -92], [-8, -92]]}
+    - {anim: walk, speed: 1.2, mode: pingpong, path: [[50, 10], [50, 90]]}
+    - {anim: walk, speed: 1.0, mode: pingpong, path: [[10, 50], [90, 50]]}
+    - {anim: walk, speed: 1.3, mode: loop, path: [[38, 38], [62, 38], [62, 62], [38, 62]]}
+    - {anim: walk, speed: 1.2, mode: loop, path: [[62, 62], [62, 38], [38, 38], [38, 62]]}
+    - {anim: walk, speed: 1.2, mode: pingpong, path: [[12, -12], [12, -86], [85, -86]]}
+    - {anim: walk, speed: 1.1, mode: pingpong, path: [[-12, 38], [-90, 38]]}
+    - {anim: run,  speed: 3.2, mode: loop, path: [[12, 12], [88, 12], [88, 88], [12, 88]]}
+    - {anim: run,  speed: 2.8, mode: loop, path: [[-35, -45], [-65, -45], [-65, -55], [-35, -55]]}
+
+  # Random closed loops inside a region (seeded, so the world is reproducible).
+  wanderers:
+    - {count: 5, region: [14, 14, 86, 86], points: 6, speed: [0.9, 1.4]}
+
+  # Standing / chatting people (animate in place).
+  idle:
+    - {anim: talk_b, x: 44, y: 46, yaw: 20}
+    - {anim: talk_b, x: 45.5, y: 47.2, yaw: 220}
+    - {anim: stand, x: 29, y: 11, yaw: -90}
+    - {anim: stand, x: -41, y: -11, yaw: 90}

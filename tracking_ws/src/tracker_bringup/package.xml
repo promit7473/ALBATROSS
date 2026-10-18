@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>tracker_bringup</name>
+  <version>0.1.0</version>
+  <description>Launch files and parameters for the full drone person-tracking system.</description>
+  <maintainer email="merajhossainpromit@gmail.com">Meraj Hossain Promit</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>tracker_sim</exec_depend>
+  <exec_depend>tracker_perception</exec_depend>
+  <exec_depend>tracker_control</exec_depend>
+  <exec_depend>tracker_ui</exec_depend>
+  <exec_depend>mavros</exec_depend>
+  <exec_depend>rqt_image_view</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

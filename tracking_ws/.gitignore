@@ -1,0 +1,7 @@
+build/
+install/
+log/
+assets/
+__pycache__/
+*.pyc
+.pytest_cache/

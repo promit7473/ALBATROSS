@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PX4 x500 + fixed tracking camera.
+  The camera mount MUST match tracker_control's `camera_pitch_deg` / `camera_offset`
+  parameters (config/tracking.yaml), which the geolocation uses to project pixels
+  onto the ground.
+-->
+<sdf version="1.9">
+  <model name="x500_tracker">
+    <include merge="true">
+      <uri>model://x500</uri>
+    </include>
+    <link name="camera_link">
+      <pose relative_to="base_link">0.12 0 0.20 0 0.6981 0</pose>  <!-- 40 deg pitch down -->
+      <inertial>
+        <mass>0.05</mass>
+        <inertia><ixx>4e-5</ixx><iyy>4e-5</iyy><izz>4e-5</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <visual name="housing">
+        <geometry><box><size>0.03 0.05 0.04</size></box></geometry>
+        <material><diffuse>0.1 0.1 0.1 1</diffuse></material>
+      </visual>
+      <sensor name="tracking_camera" type="camera">
+        <topic>tracker/camera/image</topic>
+        <camera>
+          <horizontal_fov>1.2</horizontal_fov>
+          <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+          <clip><near>0.1</near><far>500</far></clip>
+          <noise><type>gaussian</type><mean>0</mean><stddev>0.004</stddev></noise>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+    </link>
+    <joint name="camera_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>camera_link</child>
+    </joint>
+  </model>
+</sdf>

@@ -1,0 +1,6 @@
+# Flight commands: takeoff | land | hover | follow_mode | distance | altitude | orbit_rate | move | yaw
+string command
+string value
+---
+bool success
+string message

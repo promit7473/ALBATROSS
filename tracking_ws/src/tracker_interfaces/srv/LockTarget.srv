@@ -1,0 +1,5 @@
+# Lock onto a track id (track_id < 0 releases the lock).
+int32 track_id
+---
+bool success
+string message
