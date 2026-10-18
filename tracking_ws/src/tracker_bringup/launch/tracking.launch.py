@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -38,7 +38,8 @@ def launch_setup(context):
                   parameters=[params])
     console = Node(package='tracker_ui', executable='operator_console', output='screen',
                    condition=IfCondition(LaunchConfiguration('console')))
-    return [sim, mavros, perception, follow, console]
+    # console last, so its window opens on top of the Gazebo GUI
+    return [sim, mavros, perception, follow, TimerAction(period=15.0, actions=[console])]
 
 
 def generate_launch_description():

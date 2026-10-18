@@ -51,20 +51,18 @@ scripts/build.sh
 scripts/run.sh               # Gazebo + PX4 + MAVROS + perception + controller + console
 ```
 
-In the **Drone Tracker** window:
+The **Drone Tracker** window opens at the top-right, on top of Gazebo, about 15 s after launch.
+It shows the drone camera with every detection boxed and numbered, plus buttons for every command:
 
-| input | action |
-|---|---|
-| `t` | take off (arms, OFFBOARD, climbs to the follow altitude) |
-| `w a s d` / `q e` | while hovering: move 5 m forward/left/back/right, yaw 30 deg |
-| **left click** on a person | lock: the drone starts following |
-| right click | release the lock (the drone hovers) |
-| `h` | release the lock and hover in place |
-| `m` | follow mode: `behind` → `hold_bearing` → `orbit` |
-| `+` `-` / `0` | follow distance ±2 m / back to automatic |
-| `r` `f` | altitude ±2 m |
-| `l` | land |
-| `Esc` | close the console (the drone keeps its current behaviour) |
+1. Click **TAKE OFF**. The drone climbs to 10 m facing the park plaza, and people appear with boxes.
+2. **Click a person** (on or near their box). The box turns red, `LOCK` appears, and the drone follows.
+3. Use **MODE** (behind / hold_bearing / orbit), **DIST ±**, **ALT ±** to change how it follows.
+   **HOVER** releases the target, and right-clicking in the video does the same.
+4. While hovering, **FORWARD / BACK / LEFT / RIGHT / YAW** move the drone to look for other people.
+5. **LAND**.
+
+Keyboard shortcuts work once the window has focus: `t` take off, `l` land, `h` hover,
+`w a s d` move, `q e` yaw, `m` mode, `+ - 0` distance, `r f` altitude, `Esc` close.
 
 The same commands are available without the GUI:
 

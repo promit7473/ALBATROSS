@@ -9,8 +9,8 @@ world_name: city
 seed: 7
 ground_size: 340
 
-# Drone spawn (x, y, yaw_deg). Grass lawn in the park, away from walking paths.
-drone_spawn: [22.0, 26.0, 45.0]
+# Drone spawn (x, y, yaw_deg). Park lawn facing the plaza, so people are in view after takeoff.
+drone_spawn: [30.0, 30.0, 45.0]
 
 # Flat visual-only surfaces drawn on the ground: [cx, cy, sx, sy, colour, layer]
 # (layer = draw order; a higher layer sits a few mm above lower ones).
@@ -104,7 +104,7 @@ rows:
 # [xmin, ymin, xmax, ymax] -- paths, the plaza, buildings and the drone pad.
 scatter:
   - {model: oak_tree, count: 14, region: [16, 16, 84, 84], min_gap: 9,
-     keep_out: [[45, 9, 55, 91], [9, 45, 91, 55], [34, 34, 66, 66], [14, 18, 30, 34]]}
+     keep_out: [[45, 9, 55, 91], [9, 45, 91, 55], [34, 34, 66, 66], [20, 20, 40, 40]]}
   - {model: pine_tree, count: 6, region: [-88, 44, -34, 88], min_gap: 8,
      keep_out: [[-74, 51, -50, 77], [-30, 43, -18, 84]]}
 
