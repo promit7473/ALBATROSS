@@ -1,6 +1,6 @@
 """Real drone: RTSP camera + Intelis bridge link + perception + follow controller + operator console.
 
-  GCS_TOKEN=<operator key> ros2 launch tracker_bringup real.launch.py [console:=false] [weights:=...]
+  GCS_TOKEN=<operator key> ros2 launch tracker_bringup real.launch.py [passive:=true] [console:=false] [weights:=...]
 
 The flight controller is reached through the Intelis telemetry bridge next to the drone
 (tracker_hw/bridge_link stands in for MAVROS); there is no simulation and no MAVROS here.
@@ -28,8 +28,9 @@ def launch_setup(context):
 
     camera = Node(package='tracker_hw', executable='rtsp_camera', name='rtsp_camera', output='screen',
                   parameters=params)
+    passive = LaunchConfiguration('passive').perform(context).lower() in ('1', 'true', 'yes')
     link = Node(package='tracker_hw', executable='bridge_link', name='bridge_link', output='screen',
-                parameters=params)
+                parameters=params + [{'passive': passive}])
     perception = Node(package='tracker_perception', executable='perception_node', name='perception',
                       prefix=prefix, output='screen', parameters=params + [{'weights': weights}])
     follow = Node(package='tracker_control', executable='follow_node', name='follow', output='screen',
@@ -43,5 +44,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('console', default_value='true', description='operator console window'),
         DeclareLaunchArgument('weights', default_value='', description='YOLO weights path'),
+        DeclareLaunchArgument('passive', default_value='false',
+                              description='observe only: track and display, never command the drone'),
         OpaqueFunction(function=launch_setup),
     ])

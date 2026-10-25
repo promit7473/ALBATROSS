@@ -13,6 +13,7 @@ to it; this node signs in as operator and stands in for MAVROS, so follow_node r
 The bridge enforces its own limits and watchdog (hover, then Hold, when setpoints stop), so a
 dropped link from this computer cannot leave the drone flying on a stale command.
 The operator key is read from the environment (GCS_TOKEN), never from parameters.
+With passive:=true nothing is ever sent to the drone: state and pose are read, commands dropped.
 """
 import asyncio
 import json
@@ -42,6 +43,7 @@ class BridgeLink(Node):
             ('url', 'wss://kibo-pc.taildedc36.ts.net:10000/'),
             ('token_env', 'GCS_TOKEN'),
             ('allow_arm', False),
+            ('passive', False),                 # observe only: never send a command to the drone
             ('stale_after', 3.0),               # [s] heartbeat age -> reported as disconnected
         ])
         self.prm = {x.name: x.value for x in p}
@@ -127,6 +129,9 @@ class BridgeLink(Node):
     def _send(self, obj):
         if not self.authed or self.ws is None:
             return False
+        if self.prm['passive'] and obj['cmd'] != 'track_subscribe':
+            self._warn_once('passive', 'passive mode: commands are not sent to the drone', every=30.0)
+            return False
         if obj['cmd'].startswith('track') and not self.track_ok:
             return False                        # an old bridge would answer every setpoint with a warning
         asyncio.run_coroutine_threadsafe(self._send_async(json.dumps(obj)), self.loop)
@@ -170,7 +175,7 @@ class BridgeLink(Node):
             if self.authed and not was:
                 self.get_logger().info('signed in as operator')
                 if self.track_ok:
-                    asyncio.ensure_future(self.ws.send(json.dumps({'cmd': 'track_subscribe'})))
+                    self._send({'cmd': 'track_subscribe'})
             elif m.get('attempt') and not self.authed:
                 self.get_logger().error('bridge rejected the operator key')
         elif t == 'hello':
