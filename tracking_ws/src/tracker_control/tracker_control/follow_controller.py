@@ -38,6 +38,27 @@ from tracker_control.geometry import wrap
 MIN_AUTO_PITCH = math.radians(5.0)      # below this the automatic stand-off distance is undefined
 
 
+def keep_out(v_xy, drone_xy, target_xy, soft, hard, v_back):
+    """Last safety filter on a horizontal velocity command near the person.
+
+    Inside `soft` [m] the component of v toward the target is removed and a back-off
+    velocity grows linearly to `v_back` at `hard`; inside `hard` the drone only backs
+    away at `v_back`. Returns (v_xy, zone) with zone 'clear' | 'soft' | 'hard'.
+    """
+    v = np.asarray(v_xy, float)
+    rel = np.asarray(target_xy, float) - np.asarray(drone_xy, float)
+    d = float(np.linalg.norm(rel))
+    if soft <= 0 or d >= soft:
+        return v, 'clear'
+    u = rel / d if d > 1e-6 else np.array([1.0, 0.0])      # unit vector drone -> target
+    if d <= hard:
+        return -v_back * u, 'hard'
+    closing = float(v @ u)
+    if closing > 0:
+        v = v - closing * u
+    return v - v_back * (soft - d) / max(soft - hard, 1e-6) * u, 'soft'
+
+
 @dataclass
 class FollowParams:
     altitude: float = 10.0

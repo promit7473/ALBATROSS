@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from tracker_control.follow_controller import FollowController, FollowParams
+from tracker_control.follow_controller import FollowController, FollowParams, keep_out
 from tracker_control.geometry import CameraModel, quat_to_rot
 from tracker_control.target_estimator import TargetEstimator
 
@@ -70,3 +70,17 @@ def test_horizontal_camera():
     p = FollowParams(camera_pitch=0.0, distance=0.0)
     assert FollowController(p).standoff_distance() == p.min_distance
     assert FollowController(FollowParams(camera_pitch=0.0, distance=10.0)).standoff_distance() == 10.0
+
+
+def test_keep_out():
+    drone, target = [0.0, 0.0], [5.0, 0.0]                  # person 5 m ahead (+x)
+    v, zone = keep_out([1.0, 0.0], [0, 0], [20.0, 0.0], 6.0, 4.0, 1.5)
+    assert zone == 'clear' and np.allclose(v, [1.0, 0.0])
+    v, zone = keep_out([2.0, 1.0], drone, target, 6.0, 4.0, 1.5)
+    assert zone == 'soft' and v[0] < 0 and abs(v[1] - 1.0) < 1e-9     # no closing, sideways kept, backs off
+    v, zone = keep_out([-3.0, 0.0], drone, target, 6.0, 4.0, 1.5)
+    assert zone == 'soft' and v[0] <= -3.0                              # already retreating: kept
+    v, zone = keep_out([2.0, 2.0], drone, [3.0, 0.0], 6.0, 4.0, 1.5)
+    assert zone == 'hard' and np.allclose(v, [-1.5, 0.0])
+    v, zone = keep_out([1.0, 0.0], drone, target, 0.0, 0.0, 1.5)
+    assert zone == 'clear'                                              # disabled

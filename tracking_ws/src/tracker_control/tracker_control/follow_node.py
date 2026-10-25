@@ -10,6 +10,9 @@ Flight state machine (PX4 offboard via MAVROS)
   any airborne state --pilot leaves OFFBOARD--> PILOT (we stop commanding)
   FOLLOW / SEARCH --no camera frame for `video_timeout`--> HOVER (real video link dropped)
 
+Keep-out: every airborne velocity command passes keep_out() while the target position is
+known: inside `keepout_soft` no motion toward the person, inside `keepout_hard` back away and climb.
+
 Subscribes  /mavros/state, /mavros/local_position/pose, tracking/target, camera/camera_info
 Publishes   /mavros/setpoint_raw/local (velocity + yaw-rate setpoints, 20 Hz)
             follow/status (FollowStatus), follow/target_pose (PoseStamped, ENU)
@@ -34,7 +37,7 @@ from sensor_msgs.msg import CameraInfo
 from tracker_interfaces.msg import FollowStatus, TargetState
 from tracker_interfaces.srv import Command
 
-from tracker_control.follow_controller import FollowController, FollowParams
+from tracker_control.follow_controller import FollowController, FollowParams, keep_out
 from tracker_control.geometry import CameraModel, quat_to_rot, wrap, yaw_of
 from tracker_control.target_estimator import TargetEstimator
 
@@ -93,6 +96,8 @@ class FollowNode(Node):
             ('target_accel_std', 1.5), ('ground_z', 0.0),
             ('setpoint_rate', 20.0),
             ('video_timeout', 0.0),          # [s] 0 = off (simulation)
+            ('keepout_soft', 4.0),           # [m] no motion toward the person inside this
+            ('keepout_hard', 2.5),           # [m] back away + climb inside this
             ('px4_params', ['']),
         ])
         prm = {x.name: x.value for x in decl}
@@ -122,6 +127,7 @@ class FollowNode(Node):
         self.last_request = 0.0
         self.search_dir = 1.0
         self.last_frame_t = None
+        self.keepout_zone = 'clear'
 
         self.sp_pub = self.create_publisher(PositionTarget, '/mavros/setpoint_raw/local', 10)
         self.status_pub = self.create_publisher(FollowStatus, 'follow/status', 10)
@@ -341,6 +347,18 @@ class FollowNode(Node):
     # ------------------------------------------------------------------ MAVROS helpers
 
     def _send(self, vx, vy, vz, yaw_rate):
+        if self.fsm in AIRBORNE and self.pose is not None and self.estimator.valid:
+            t = self.now()
+            tp, _ = self.estimator.state_at(min(t, self.last_target_seen + self.prm['coast_time']))
+            v, zone = keep_out((vx, vy), self.pose[0][:2], tp, self.prm['keepout_soft'],
+                               self.prm['keepout_hard'], self.fp.v_max_xy)
+            if zone != self.keepout_zone:
+                log = self.get_logger().warn if zone != 'clear' else self.get_logger().info
+                log(f'keep-out: {zone}')
+                self.keepout_zone = zone
+            vx, vy = v
+            if zone == 'hard':
+                vz = max(vz, 0.5)
         sp = PositionTarget()
         sp.header.stamp = self.get_clock().now().to_msg()
         sp.coordinate_frame = PositionTarget.FRAME_LOCAL_NED      # MAVROS converts from ENU

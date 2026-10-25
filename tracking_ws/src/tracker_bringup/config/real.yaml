@@ -17,6 +17,7 @@ bridge_link:
 perception:
   ros__parameters:
     imgsz: 960                   # RTX GPU on the lab PC
+    reid_max_lost_time: 5.0      # [s] drop the lock (drone hovers) after 5 s unseen
     threads: 8
 
 follow:
@@ -30,10 +31,12 @@ follow:
     camera_pitch_deg: 0.0
     camera_hfov: 1.414           # 81 deg, same as rtsp_camera
     camera_offset: [0.05, 0.0, -0.05]
-    v_max_xy: 3.0                # conservative for first flights; the bridge caps at 5 m/s
+    v_max_xy: 1.5                # first flights (readiness report stage 5); the bridge caps at 5 m/s
     v_max_z: 1.0
     a_max_xy: 1.5
-    yaw_rate_max_deg: 40.0
+    yaw_rate_max_deg: 30.0
+    keepout_soft: 6.0            # [m] no motion toward the person inside this, back off
+    keepout_hard: 4.0            # [m] back away at v_max_xy and climb
     min_altitude: 2.5
     geofence_radius: 50.0
     video_timeout: 1.0           # no camera frame for 1 s -> hover
