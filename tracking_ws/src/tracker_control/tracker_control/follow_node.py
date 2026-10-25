@@ -353,8 +353,10 @@ class FollowNode(Node):
             v, zone = keep_out((vx, vy), self.pose[0][:2], tp, self.prm['keepout_soft'],
                                self.prm['keepout_hard'], self.fp.v_max_xy)
             if zone != self.keepout_zone:
-                log = self.get_logger().warn if zone != 'clear' else self.get_logger().info
-                log(f'keep-out: {zone}')
+                if zone == 'clear':                          # rclpy: one severity per call site
+                    self.get_logger().info('keep-out: clear')
+                else:
+                    self.get_logger().warn(f'keep-out: {zone}')
                 self.keepout_zone = zone
             vx, vy = v
             if zone == 'hard':

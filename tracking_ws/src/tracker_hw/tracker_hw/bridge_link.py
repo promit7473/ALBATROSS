@@ -158,7 +158,10 @@ class BridgeLink(Node):
                     self.get_logger().info(f'connected to bridge {url}')
                     await ws.send(json.dumps({'cmd': 'auth', 'token': self.token}))
                     async for raw in ws:
-                        self._on_message(json.loads(raw))
+                        try:
+                            self._on_message(json.loads(raw))
+                        except Exception as e:                  # a bad message must not drop the link
+                            self._warn_once('msg', f'bad bridge message: {e!r}')
             except Exception as e:
                 self._warn_once('ws', f'bridge connection: {e!r}; retrying')
             self.ws, self.authed, self.track_ok = None, False, False
@@ -186,8 +189,10 @@ class BridgeLink(Node):
             else:
                 self.get_logger().info(f'bridge version {m.get("version")}')
         elif t == 'text':
-            log = self.get_logger().warn if m.get('level') in ('warn', 'critical') else self.get_logger().info
-            log(f'[drone] {m.get("text")}')
+            if m.get('level') in ('warn', 'critical'):          # rclpy: one severity per call site
+                self.get_logger().warn(f'[drone] {m.get("text")}')
+            else:
+                self.get_logger().info(f'[drone] {m.get("text")}')
 
 
 def main():
