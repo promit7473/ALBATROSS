@@ -2,7 +2,7 @@
 # Start everything: Gazebo city + PX4 SITL + MAVROS + perception + follow controller + console.
 # Extra args go to the launch file, e.g.  scripts/run.sh gui:=false weights:=assets/weights/yolo11s.pt
 WS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source /opt/ros/humble/setup.bash
+source "$(ls /opt/ros/{humble,jazzy}/setup.bash 2>/dev/null | head -1)"
 source "$WS/install/setup.bash"
 export TRACKING_WS="$WS"
 

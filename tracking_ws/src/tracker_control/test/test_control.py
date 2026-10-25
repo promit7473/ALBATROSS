@@ -56,3 +56,17 @@ def test_follow_converges_behind_walking_target():
     assert rel[0] < -0.9 * ctl.standoff_distance()          # behind (target walks +x)
     los = math.atan2(-rel[1], -rel[0])
     assert abs(math.remainder(los - yaw, 2 * math.pi)) < math.radians(5)
+
+
+def test_horizontal_camera():
+    cam = CameraModel.from_fov(1280, 720, math.radians(81), 0.0)
+    fy = cam.fy
+    # feet 10 m ahead of a drone at 3 m: depression atan(3/10) below the optical axis
+    v = 360 + fy * 3 / 10
+    (xy, _) = cam.ground_point(640, v, [0, 0, 3], yaw_rot(0.0))
+    assert np.allclose(xy, [10, 0], atol=1e-6)
+    assert cam.ground_point(640, 300, [0, 0, 3], yaw_rot(0.0)) is None     # above the horizon
+    # automatic distance is undefined without pitch: fall back instead of dividing by zero
+    p = FollowParams(camera_pitch=0.0, distance=0.0)
+    assert FollowController(p).standoff_distance() == p.min_distance
+    assert FollowController(FollowParams(camera_pitch=0.0, distance=10.0)).standoff_distance() == 10.0

@@ -1,0 +1,40 @@
+# Real drone overrides, loaded after tracking.yaml (scripts/run_real.sh, real.launch.py).
+
+rtsp_camera:
+  ros__parameters:
+    url: rtsp://127.0.0.1:8554/cam_web     # drone camera, relayed by MediaMTX on this PC
+    width: 1280
+    height: 720
+    hfov_deg: 81.0               # SIYI A8 mini; set to the real camera (calibrate to be sure)
+    latency: 0.25                # [s] capture -> arrival over the video link; tune from a step test
+
+bridge_link:
+  ros__parameters:
+    url: wss://kibo-pc.taildedc36.ts.net:10000/
+    token_env: GCS_TOKEN         # operator key comes from the environment
+    allow_arm: false             # arm + take off from the dashboard; the tracker only takes over in the air
+
+perception:
+  ros__parameters:
+    imgsz: 960                   # RTX GPU on the lab PC
+    threads: 8
+
+follow:
+  ros__parameters:
+    # Fixed, horizontal camera (no gimbal). The person's feet are only in view when they are
+    # below the optical axis by less than half the vertical FOV (~25 deg at 81 deg HFOV, 16:9):
+    # distance >= altitude / tan(25 deg) ~ 2.1 x altitude. 3 m up and 10 m back puts the feet
+    # ~17 deg down, with margin for the nose pitching up when the drone brakes.
+    altitude: 3.0
+    distance: 10.0               # [m] explicit: 'auto' needs a downward-pitched camera
+    camera_pitch_deg: 0.0
+    camera_hfov: 1.414           # 81 deg, same as rtsp_camera
+    camera_offset: [0.05, 0.0, -0.05]
+    v_max_xy: 3.0                # conservative for first flights; the bridge caps at 5 m/s
+    v_max_z: 1.0
+    a_max_xy: 1.5
+    yaw_rate_max_deg: 40.0
+    min_altitude: 2.5
+    geofence_radius: 50.0
+    video_timeout: 1.0           # no camera frame for 1 s -> hover
+    px4_params: [""]             # never touch real PX4 parameters from here

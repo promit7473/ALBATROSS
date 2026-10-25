@@ -32,11 +32,13 @@ def launch_setup(context):
                                'tgt_component': 1, 'fcu_protocol': 'v2.0',
                                'plugin_allowlist': ['sys_status', 'sys_time', 'command', 'param', 'imu',
                                                     'local_position', 'setpoint_raw', 'home_position']}])
+    venv = ws / '.venv' / 'bin' / 'python'
+    prefix = [str(venv)] if venv.exists() else None      # torch / ultralytics live in the venv
     perception = Node(package='tracker_perception', executable='perception_node', name='perception',
-                      output='screen', parameters=[params, {'weights': weights}])
+                      prefix=prefix, output='screen', parameters=[params, {'weights': weights}])
     follow = Node(package='tracker_control', executable='follow_node', name='follow', output='screen',
                   parameters=[params])
-    console = Node(package='tracker_ui', executable='operator_console', output='screen',
+    console = Node(package='tracker_ui', executable='operator_console', prefix=prefix, output='screen',
                    condition=IfCondition(LaunchConfiguration('console')))
     # console last, so its window opens on top of the Gazebo GUI
     return [sim, mavros, perception, follow, TimerAction(period=15.0, actions=[console])]

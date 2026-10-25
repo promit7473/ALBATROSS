@@ -8,6 +8,7 @@ Flight state machine (PX4 offboard via MAVROS)
   SEARCH --target re-acquired--> FOLLOW ;  --lock released / timeout--> HOVER
   any airborne state --land--> LANDING --disarmed--> LANDED
   any airborne state --pilot leaves OFFBOARD--> PILOT (we stop commanding)
+  FOLLOW / SEARCH --no camera frame for `video_timeout`--> HOVER (real video link dropped)
 
 Subscribes  /mavros/state, /mavros/local_position/pose, tracking/target, camera/camera_info
 Publishes   /mavros/setpoint_raw/local (velocity + yaw-rate setpoints, 20 Hz)
@@ -91,6 +92,7 @@ class FollowNode(Node):
             ('coast_time', 3.0), ('search_yaw_rate_deg', 25.0),
             ('target_accel_std', 1.5), ('ground_z', 0.0),
             ('setpoint_rate', 20.0),
+            ('video_timeout', 0.0),          # [s] 0 = off (simulation)
             ('px4_params', ['']),
         ])
         prm = {x.name: x.value for x in decl}
@@ -119,6 +121,7 @@ class FollowNode(Node):
         self.params_sent = False
         self.last_request = 0.0
         self.search_dir = 1.0
+        self.last_frame_t = None
 
         self.sp_pub = self.create_publisher(PositionTarget, '/mavros/setpoint_raw/local', 10)
         self.status_pub = self.create_publisher(FollowStatus, 'follow/status', 10)
@@ -149,6 +152,7 @@ class FollowNode(Node):
         self.poses.add(self.now(), p, R)     # receive time, same clock as the camera frames
 
     def on_camera_info(self, msg):
+        self.last_frame_t = self.now()       # one CameraInfo per frame: doubles as a video heartbeat
         if self.camera is None and msg.k[0] > 0:
             off = self.prm['camera_offset']
             self.camera = CameraModel(msg.k[0], msg.k[4], msg.k[2], msg.k[5],
@@ -260,6 +264,11 @@ class FollowNode(Node):
 
         t = self.now()
         target_fresh = self.estimator.valid and t - self.last_target_seen < self.prm['coast_time']
+        vt = self.prm['video_timeout']
+        video_ok = vt <= 0 or (self.last_frame_t is not None and t - self.last_frame_t < vt)
+        if not video_ok and self.fsm in ('FOLLOW', 'SEARCH'):
+            self.get_logger().warn('camera video lost: holding position')
+            self._enter('HOVER')
 
         if self.fsm == 'TAKEOFF':
             self._ensure_offboard_and_armed()
@@ -268,7 +277,7 @@ class FollowNode(Node):
                 self._enter('HOVER')
         elif self.fsm == 'HOVER':
             self._hold(dt)
-            if self.target_status == TargetState.TRACKING and target_fresh:
+            if self.target_status == TargetState.TRACKING and target_fresh and video_ok:
                 self._enter('FOLLOW')
         elif self.fsm == 'FOLLOW':
             if self.target_status == TargetState.NONE:
@@ -361,6 +370,8 @@ class FollowNode(Node):
         if self.params_sent:
             return
         self.params_sent = True
+        if not any('=' in item for item in self.prm['px4_params']):
+            return
         if not self.param_set.wait_for_service(timeout_sec=2.0):
             self.get_logger().warn('/mavros/param/set unavailable: PX4 parameters not applied')
             return

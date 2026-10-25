@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>tracker_hw</name>
+  <version>0.1.0</version>
+  <description>Real drone I/O: RTSP camera stream and the Intelis telemetry bridge (WebSocket) in place of MAVROS.</description>
+  <maintainer email="merajhossainpromit@gmail.com">Meraj Hossain Promit</maintainer>
+  <license>MIT</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>mavros_msgs</exec_depend>
+  <exec_depend>python3-websockets</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>ffmpeg</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

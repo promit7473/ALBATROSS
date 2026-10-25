@@ -7,6 +7,8 @@ Geometry
   With a fixed camera pitched down by theta, the target is centred vertically
   when (H - h_c) / D = tan(theta)  (h_c = height of the person's centre), so by
   default D is derived from H:  D_auto = (H - h_c) / tan(theta).
+  A (near-)horizontal camera has no such relation: set `distance` explicitly; with
+  distance = 0 the closest allowed distance is used.
 
 Bearing (follow modes)
   behind        when the target walks (|v| > v_min), swing round to stand behind
@@ -32,6 +34,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from tracker_control.geometry import wrap
+
+MIN_AUTO_PITCH = math.radians(5.0)      # below this the automatic stand-off distance is undefined
 
 
 @dataclass
@@ -71,7 +75,12 @@ class FollowController:
 
     def standoff_distance(self):
         p = self.p
-        d = p.distance if p.distance > 0 else (p.altitude - p.target_centre_height) / math.tan(p.camera_pitch)
+        if p.distance > 0:
+            d = p.distance
+        elif p.camera_pitch > MIN_AUTO_PITCH:
+            d = (p.altitude - p.target_centre_height) / math.tan(p.camera_pitch)
+        else:
+            d = p.min_distance
         return float(np.clip(d, p.min_distance, p.max_distance))
 
     def _update_bearing(self, dt, drone_xy, target_xy, target_v):
