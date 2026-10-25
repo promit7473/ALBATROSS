@@ -11,7 +11,10 @@ Keyboard shortcuts (the window must have focus):
   w a s d     move 5 m forward / left / back / right (while hovering)
   q / e       yaw 30 deg left / right (while hovering)
   m           cycle follow mode      + / - / 0   distance +2 / -2 / auto
-  r / f       altitude +2 / -2       Esc          close the console
+  r / f       altitude +2 / -2       z            full screen on / off
+  Esc         close the console
+
+The window can be resized (aspect ratio kept); it starts at a size that fits the screen.
 """
 import math
 import threading
@@ -25,7 +28,8 @@ from tracker_interfaces.msg import FollowStatus, TargetState, TrackArray
 from tracker_interfaces.srv import Command, LockTarget
 
 WINDOW = 'Drone Tracker'
-SCALE = 1.25                                 # video is shown 1.25x (640x480 -> 800x600)
+VIDEO_W = 1280                               # video is drawn this wide, whatever the camera resolution
+FIT_H = 900                                  # start no taller than this (1080p screen minus bars / dock)
 MODES = ['behind', 'hold_bearing', 'orbit']
 MOVES = {'w': '5 0', 's': '-5 0', 'a': '0 5', 'd': '0 -5'}      # forward left [m]
 MAP_SIZE, MAP_RANGE = 200, 40.0             # mini-map: pixels, metres from centre to edge
@@ -39,7 +43,7 @@ BUTTONS = [
     [('TAKE OFF', 't'), ('LAND', 'l'), ('HOVER', 'h'), ('MODE', 'm'),
      ('DIST -', '-'), ('DIST +', '+'), ('DIST AUTO', '0'), ('ALT -', 'f'), ('ALT +', 'r')],
     [('YAW LEFT', 'q'), ('FORWARD', 'w'), ('YAW RIGHT', 'e'), ('LEFT', 'a'), ('BACK', 's'),
-     ('RIGHT', 'd')],
+     ('RIGHT', 'd'), ('FULL SCREEN', 'z')],
 ]
 
 
@@ -56,7 +60,9 @@ class Console(Node):
         self.cmd_cli = self.create_client(Command, 'follow/command')
         self.message = 'press TAKE OFF, then click a person'
         self.buttons = []                  # (x1, y1, x2, y2, key) in window pixels, rebuilt each render
-        self.video_h = int(480 * SCALE)
+        self.scale = 1.0                   # window pixels per video pixel, set in render()
+        self.video_h = 720
+        self.fullscreen = False
 
     def on_image(self, m):
         img = np.frombuffer(m.data, np.uint8).reshape(m.height, m.width, -1)[..., :3]
@@ -93,7 +99,7 @@ class Console(Node):
         if right:
             self.call_lock(-1)
             return
-        self.lock_at(x / SCALE, y / SCALE)
+        self.lock_at(x / self.scale, y / self.scale)
 
     def lock_at(self, x, y):
         """Lock the person under (or nearest to) video pixel (x, y)."""
@@ -153,6 +159,10 @@ class Console(Node):
             self.command('yaw', '30')
         elif c == 'e':
             self.command('yaw', '-30')
+        elif c == 'z':
+            self.fullscreen = not self.fullscreen
+            cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
+                                  cv2.WINDOW_FULLSCREEN if self.fullscreen else cv2.WINDOW_NORMAL)
 
     # ------------------------------------------------------------------ drawing
 
@@ -160,10 +170,11 @@ class Console(Node):
         with self.lock:
             frame = None if self.frame is None else self.frame.copy()
         if frame is None:
-            frame = np.full((480, 640, 3), 30, np.uint8)
-            cv2.putText(frame, 'waiting for camera...', (190, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        (200, 200, 200), 1, cv2.LINE_AA)
-        video = cv2.resize(frame, None, fx=SCALE, fy=SCALE, interpolation=cv2.INTER_LINEAR)
+            frame = np.full((720, 1280, 3), 30, np.uint8)
+            cv2.putText(frame, 'waiting for camera...', (500, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                        (200, 200, 200), 2, cv2.LINE_AA)
+        self.scale = VIDEO_W / frame.shape[1]
+        video = cv2.resize(frame, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
         h, w = video.shape[:2]
         self.video_h = h
         cv2.drawMarker(video, (w // 2, h // 2), (255, 255, 255), cv2.MARKER_CROSS, 18, 1)
@@ -178,7 +189,7 @@ class Console(Node):
         s, t, tr = self.status, self.target, self.tracks
         n_people = sum(1 for x in tr.tracks if x.class_name == 'person') if tr else 0
         if s is None or not s.connected:
-            text = 'waiting for the drone (PX4 / MAVROS) ...'
+            text = 'waiting for the drone link ...'
         elif s.flight_state == 'LANDED':
             text = 'press TAKE OFF'
         elif s.flight_state == 'TAKEOFF':
@@ -282,10 +293,13 @@ def main():
         elif event == cv2.EVENT_RBUTTONDOWN:
             node.click(x, y, right=True)
 
-    # GUI_NORMAL: no Qt toolbar (it shifts mouse coordinates); keep it in front of Gazebo
-    cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
+    # NORMAL: resizable, mouse coordinates stay in image pixels; GUI_NORMAL: no Qt toolbar
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_NORMAL)
     cv2.setMouseCallback(WINDOW, on_mouse)
-    cv2.imshow(WINDOW, node.render())
+    img = node.render()
+    k = min(1.0, FIT_H / img.shape[0])
+    cv2.resizeWindow(WINDOW, int(img.shape[1] * k), int(img.shape[0] * k))
+    cv2.imshow(WINDOW, img)
     cv2.moveWindow(WINDOW, 10000, 0)             # window managers clamp this to the top-right corner
     cv2.setWindowProperty(WINDOW, cv2.WND_PROP_TOPMOST, 1)
     try:

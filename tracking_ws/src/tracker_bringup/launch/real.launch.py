@@ -20,7 +20,9 @@ def launch_setup(context):
     bringup = Path(get_package_share_directory('tracker_bringup'))
     ws = Path(os.environ.get('TRACKING_WS') or bringup.parents[3])
     params = [str(bringup / 'config' / 'tracking.yaml'), str(bringup / 'config' / 'real.yaml')]
-    weights = LaunchConfiguration('weights').perform(context) or str(ws / 'assets' / 'weights' / 'yolo11s.pt')
+    # yolo11l: on the lab RTX 5060 Ti ~19 ms/frame at 960 px, and it keeps partly hidden people
+    # that yolo11s drops (benchmark on drone frames, 2026-10-25)
+    weights = LaunchConfiguration('weights').perform(context) or str(ws / 'assets' / 'weights' / 'yolo11l.pt')
     venv = ws / '.venv' / 'bin' / 'python'
     prefix = [str(venv)] if venv.exists() else None      # torch / ultralytics live in the venv
 
