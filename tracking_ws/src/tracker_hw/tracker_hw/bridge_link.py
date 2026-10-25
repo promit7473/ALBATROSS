@@ -58,6 +58,7 @@ class BridgeLink(Node):
         self.vehicle = {}                       # last bridge 'state'
         self.vehicle_at = 0.0
         self.authed = False
+        self.track_ok = False                   # bridge advertises the 'track' feature
         self.ws, self.loop = None, None
         self.last_warn = {}
         self.create_timer(0.1, self.publish_state)
@@ -126,6 +127,8 @@ class BridgeLink(Node):
     def _send(self, obj):
         if not self.authed or self.ws is None:
             return False
+        if obj['cmd'].startswith('track') and not self.track_ok:
+            return False                        # an old bridge would answer every setpoint with a warning
         asyncio.run_coroutine_threadsafe(self._send_async(json.dumps(obj)), self.loop)
         return True
 
@@ -153,7 +156,7 @@ class BridgeLink(Node):
                         self._on_message(json.loads(raw))
             except Exception as e:
                 self._warn_once('ws', f'bridge connection: {e!r}; retrying')
-            self.ws, self.authed = None, False
+            self.ws, self.authed, self.track_ok = None, False, False
             await asyncio.sleep(2.0)
 
     def _on_message(self, m):
@@ -166,12 +169,15 @@ class BridgeLink(Node):
             was, self.authed = self.authed, bool(m.get('ok'))
             if self.authed and not was:
                 self.get_logger().info('signed in as operator')
-                asyncio.ensure_future(self.ws.send(json.dumps({'cmd': 'track_subscribe'})))
+                if self.track_ok:
+                    asyncio.ensure_future(self.ws.send(json.dumps({'cmd': 'track_subscribe'})))
             elif m.get('attempt') and not self.authed:
                 self.get_logger().error('bridge rejected the operator key')
         elif t == 'hello':
-            if 'track' not in m.get('features', []):
-                self.get_logger().error(f'bridge {m.get("version")} has no tracking support: update telem_bridge.py')
+            self.track_ok = 'track' in m.get('features', [])
+            if not self.track_ok:
+                self.get_logger().error(f'bridge {m.get("version")} has no tracking support: update telem_bridge.py '
+                                        '(video + detection work; the drone will not be commanded)')
             else:
                 self.get_logger().info(f'bridge version {m.get("version")}')
         elif t == 'text':
